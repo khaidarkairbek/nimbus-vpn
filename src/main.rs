@@ -5,7 +5,7 @@ use libc;
 // The controller address structure is used to establish 
 // contact between a user client and a kernel controller.
 // As defined at https://developer.apple.com/documentation/kernel/sockaddr_ctl
-
+#[repr(C)]
 pub struct SockAddrCtl {
     pub sc_len : u8,   // The length of the structure
     pub sc_family : u8,  // AF_SYSTEM.
@@ -17,17 +17,18 @@ pub struct SockAddrCtl {
 // This structure is used with the CTLIOCGINFO ioctl to
 // translate from a kernel control name to a control id.
 // As defined at https://developer.apple.com/documentation/kernel/ctl_info
-
+#[derive(Debug)]
+#[repr(C)]
 pub struct CtlInfo {
     pub ctl_id : u32,   // Kernel Controller Id
-    pub ctl_name : [char; 96]   // Kernel Controller Name
+    pub ctl_name : [u8; 96]   // Kernel Controller Name
 }
 
 fn main() {
 
     let tun_num: u8 = 150 ; 
 
-    const DOMAIN: i32 = libc::AF_SYSTEM; // Protocol domain to be used
+    const DOMAIN: i32 = libc::PF_SYSTEM; // Protocol domain to be used
     const TY: i32 = libc::SOCK_DGRAM;   // Communication semantics
     const PROTOCOL: i32 = libc::SYSPROTO_CONTROL;  // Protocol to be used for the socket
 
@@ -45,7 +46,7 @@ fn main() {
     // Kernel Control Info
     let mut ctl_info: CtlInfo = CtlInfo {
         ctl_id : 0, 
-        ctl_name : [0 as char; 96]
+        ctl_name : [0u8; 96]
     };
 
     unsafe {
