@@ -103,7 +103,7 @@ impl TunDevice {
                     return Err(Error::last_os_error());
                 }
 
-                println!("Connected and finished");
+                println!("Tun connected ");
                 Ok(TunDevice {
                     file : file, 
                     id : tun_num
@@ -144,7 +144,7 @@ impl TunDevice {
 
 
     // Read the data from tun device into the buffer, returns the length of the read data or Error
-    pub fn read(&mut self, buffer : &mut [u8]) -> Result<usize, std::io::Error> {
+    pub fn read(&mut self, buffer : &mut Vec<u8>) -> Result<usize, std::io::Error> {
 
         let mut packet = [0; 2000];  // the regular MTU is about 1500, so 2000 should be sufficient
 
