@@ -29,17 +29,41 @@ pub enum Device {
 }
 
 impl Device {
-    pub fn set_shared_secret_key (&mut self, new_key: BigInt) {
-        if let Device::Client {shared_secret_key, ..} = self {
-            *shared_secret_key = Some(new_key)
+    pub fn set_shared_secret_key (&mut self, new_key: BigInt, client_addr: Option<SocketAddr>) -> Result<(), String>{
+        match self {
+            Device::Client { shared_secret_key , ..} => {
+                *shared_secret_key = Some(new_key);
+                Ok(())
+            },
+            Device::Server { client_key_map, ..} => {
+                if let Some(addr) = client_addr {
+                    client_key_map.insert(addr, new_key);
+                    Ok(())
+                } else {
+                    Err("Client address is not specified for a key".to_string())
+                }
+            }
         }
     }
 
-    pub fn get_shared_secret_key (&self) -> Option<&BigInt>{
-        if let Device::Client { shared_secret_key, ..} = self {
-            shared_secret_key.as_ref()
-        } else {
-            None
+    pub fn get_shared_secret_key (&self, client_addr : Option<SocketAddr>) -> Result<&BigInt, String>{
+        match self {
+            Device::Client { shared_secret_key , ..} => {
+                match shared_secret_key.as_ref() {
+                    None => Err("Shared secret key not specified for a client".to_string()), 
+                    Some(shared_key) => Ok(shared_key)
+                }
+            }, 
+            Device::Server { client_key_map, .. } => {
+                if let Some(addr) = client_addr {
+                    match client_key_map.get(&addr) {
+                        None => Err("Client address is not found in client key map".to_string()), 
+                        Some(shared_key) => Ok(shared_key)
+                    }
+                } else {
+                    Err("Client address is not specified for a key".to_string())
+                }
+            }
         }
     }
 }
@@ -127,7 +151,8 @@ fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: Opti
                     match &msg {
                         Message::Response { .. } => {
                             let shared_secret_key = process_response(&msg, &client_private_key).unwrap(); 
-                            client.set_shared_secret_key(shared_secret_key); 
+                            client.set_shared_secret_key(shared_secret_key, None).unwrap(); 
+                            println!("Shared secret key is {}", client.get_shared_secret_key().unwrap())
                         }, 
                         _ => ()  // Implement data transmission
                     }
@@ -142,15 +167,10 @@ fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: Opti
 }
 
 fn main () {
-    let args: Vec<String> = env::args().collect(); 
-
-    let device_type = &args[1]; 
-    if device_type == "client" {
-
-    } else {
-
-    }
-    
+    let client_addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+    let server_addr: SocketAddr = "127.0.0.1:8081".parse().unwrap();
+    let client_private_key: BigInt = "24".parse().unwrap();
+    client_side(client_addr, server_addr, None, client_private_key)
 }
 
 #[cfg(test)]
