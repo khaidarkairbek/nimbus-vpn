@@ -144,15 +144,21 @@ impl TunDevice {
 
 
     // Read the data from tun device into the buffer, returns the length of the read data or Error
-    pub fn read(&mut self, buffer : &mut Vec<u8>) -> Result<usize, std::io::Error> {
+    pub fn read(&mut self, buffer : &mut [u8]) -> Result<usize, std::io::Error> {
 
         let mut packet = [0; 2000];  // the regular MTU is about 1500, so 2000 should be sufficient
 
         match self.file.read(&mut packet) {
             Ok(len) => {
+                if len <= 4 {
+                    // Not enough data read to constitute a valid packet
+                    return Ok(0)
+                };
                 let data = &packet[4..len];   // removing the 4 byte header, signifying ipv6 or ipv4 packet
-                buffer[..len-4].clone_from_slice(data);  // writing the data into the beginning of the buffer
-                if len > 4 { Ok(len - 4) } else { Ok(0) }}  
+                let data_len = len - 4;
+                buffer[..data_len].clone_from_slice(data);  // writing the data into the beginning of the buffer
+                Ok(data_len)
+            },
             Err(e) => Err(e)
         }
     }

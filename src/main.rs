@@ -83,22 +83,21 @@ impl Device {
         }
     }
 
-    pub fn read_tun (&mut self) -> Result<Vec<u8>, String> {
-        let mut data = Vec::<u8>::new(); 
+    pub fn read_tun (&mut self, buffer: &mut [u8]) -> Result<usize, String> {
         match self {
             Device::Client { tun, ..} | Device::Server { tun, .. } => {
-                tun.read(&mut data).map_err(|e| e.to_string())?; 
-                Ok(data)
+                let len = tun.read(buffer).map_err(|e| e.to_string())?; 
+                Ok(len)
             }
         }
     }
 
-    pub fn write_socket (&mut self, data: Vec<u8>) -> Result<(), String> {
+    pub fn write_socket (&mut self, data: &[u8]) -> Result<(), String> {
         match self {
             Device::Client { client_socket: socket , server_addr, ..} => {
                 let mut bytes_left = data.len(); 
                 while bytes_left > 0 {
-                    let bytes_written = socket.send_to(&data, *server_addr).map_err(|e| e.to_string())?; 
+                    let bytes_written = socket.send_to(data, *server_addr).map_err(|e| e.to_string()).unwrap(); 
                     bytes_left = bytes_left - bytes_written;
                 }
                 Ok(())
@@ -207,10 +206,10 @@ fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: Opti
     client.initiate_handshake()?;
 
     loop {
-        poll.poll(&mut events, None).map_err(|e| e.to_string())?; 
+        poll.poll(&mut events, None).map_err(|e| e.to_string())?; // Replace with async tokio 
         for event in &events {
             match event.token() {
-                Token(0) => {
+                Token(0) => { 
                     let msg = client.read_socket()?;
                     match msg {
                         Message::Response { .. } => {
@@ -225,11 +224,20 @@ fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: Opti
                     }
                 }, 
                 Token(1) => {
-                    let data = client.read_tun()?;
-                    // TODO: Encryption/decryption protocols need to be established
+                    let mut buffer = [0u8; 2000];
+                    match client.read_tun(&mut buffer) {
+                        Ok(len ) => {
 
-                    client.write_socket(data)?;
-                    // Implement TUN logic
+                            if len > 0  {
+                                // TODO: Encryption/decryption protocols need to be established
+
+                                client.write_socket(&buffer[..len])?;
+                                // Implement TUN logic
+                            }
+                            
+                        }, 
+                        Err(_) => ()
+                    };
                 }, 
                 _ => ()
             }
