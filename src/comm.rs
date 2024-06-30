@@ -5,6 +5,12 @@ use mio::{Events, Poll as Mio_Poll, Interest, Token};
 use crate::dev::{Device, Message};
 use crate::tun::TunDevice;
 
+pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_private_key : BigInt) -> Result<(), String> {   
+    let mut server_socket = UdpSocket::bind(server_addr).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: Option<u8>, client_private_key: BigInt ) -> Result<(), String> {
     let mut client_socket = UdpSocket::bind(client_addr).map_err(|e| e.to_string())?;
 

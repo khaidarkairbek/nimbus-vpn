@@ -1,9 +1,12 @@
 [package]
-name = "rust-vpn"
+name = "nimbus"
+authors = ["Khaidar Kairbek", "Bishal Khadka"]
 version = "0.1.0"
 edition = "2021"
+about = "Command line application for client- and server-side VPN communication"
 
 [dependencies]
+clap = { version = "4.5.8", features = ["derive"] }
 libc = "0.2.155"
 mio = {version = "1", features = ["os-poll", "os-ext", "net"]}
 num-bigint = {version = "0.4", features = ["serde"]}
