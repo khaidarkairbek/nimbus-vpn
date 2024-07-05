@@ -25,6 +25,7 @@ fn main () {
         }, 
         Mode::Server { port, key, tun_num }=> {
             let server_addr: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap(); 
+            println!("Server address is: {:?}", server_addr);
             let server_private_key: BigInt = key.parse().unwrap(); 
             server_side(server_addr, tun_num, server_private_key).unwrap();
         }
