@@ -1,9 +1,14 @@
+use chacha20poly1305::aead::generic_array::GenericArray;
 use mio::net::UdpSocket;
 use crate::tun::TunDevice;
+use std::result;
 use std::{collections::HashMap, net::SocketAddr};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use num_bigint::BigInt;
+use chacha20poly1305::{AeadCore, ChaCha20Poly1305, ChaChaPoly1305, Nonce};
+use chacha20poly1305::aead::{Aead, KeyInit, NewAead, Nonce, OsRng};
+use std::convert::TryInto; //for conversions
 
 // Diffie Hellman Key Exchange implementation
 const DH_MODULUS: &'static str = "23";  // Placeholder values for testing
@@ -30,6 +35,37 @@ pub enum Device {
         tun : TunDevice, 
         private_key : BigInt
     }
+}
+
+
+fn pad_key_to_32_bytes(key: &[u8]) -> [u8; 32] {
+    let mut padded_key_bytes = [0u8; 32]; //array of 32 bytes zeros
+    let length = std::cmp::min(key.len(), 32); 
+    padded_key_bytes[..length].copy_from_slice(&key[..length]); //copy key bytes to the padded arr
+    padded_key_bytes
+}
+
+
+pub fn encrypt_data(data: &[u8], key: &BigInt) -> Result<Vec<u8>, String>{
+    let key_in_bytes== key.to_bytes_le(); //bigint key to a byte arr
+    let key_bytes_pad = pad_key_to_32_bytes(&key_in_bytes); //pad key to 32 bytes
+    let cipher = ChaChaPoly1305::new(GenericArray::from_slice(&key_bytes_pad)); //create chacha instance with the padded key
+    let nonce = ChaChaPoly1305::generate_nonce(&mut OsRng); //generate random nonce
+    let cipher_text = cipher.encrypt(&nonce, data).map_err(|e| e.to_string())?; //encrypt the data with generated nonce
+    let mut result = nonce.to_vec(); //combine the nonce and ciphertext into a single vector
+    result.extend(cipher_text);
+    Ok(result) 
+    
+}
+
+pub fn decrypt_data(cipher_text: &[u8], key: &BigInt) -> Result<Vec<u8>, String>{
+    let key_in_bytes= key.to_bytes_le(); //bigint key to a byte arr
+    let key_bytes_pad = pad_key_to_32_bytes(&key_in_bytes); //pad key to 32 bytes
+    let cipher = ChaChaPoly1305::new(GenericArray::from_slice(&key_bytes_pad)); //create chacha instance with the padded key
+    let (nonce, cipher_text) = cipher_text.split_at(12); //split the cipher text into nonce and actual ciphertext
+    let nonce = GenericArray::from_slice(nonce); 
+    let plain_text = cipher.decrypt(nonce, cipher_text).map_err(|e| e.to_string())?; //decrypt the ciphertext w the nonce 
+    Ok(plain_text)
 }
 
 impl Device {
@@ -183,4 +219,42 @@ impl Device {
             _ => Err("Request can be sent to server only".to_string())
         }
     }
+}
+
+
+use aes_gcm::Aes256Gcm; // Or any other cryptographic algorithm
+use aes_gcm::aead::{Aead, KeyInit, OsRng, NewAead};
+use aes_gcm::aead::generic_array::GenericArray;
+use num_bigint::BigInt;
+use std::convert::TryInto;
+
+// Encrypt data
+pub fn encrypt_data(data: &[u8], key: &BigInt) -> Result<Vec<u8>, String> {
+    let key_bytes = key.to_bytes_le();
+    let key_bytes_padded = pad_key_to_32_bytes(&key_bytes);
+    let cipher = Aes256Gcm::new(GenericArray::from_slice(&key_bytes_padded));
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng); // Generate a random nonce
+    let ciphertext = cipher.encrypt(&nonce, data).map_err(|e| e.to_string())?;
+    let mut result = nonce.to_vec();
+    result.extend(ciphertext);
+    Ok(result)
+}
+
+// Decrypt data
+pub fn decrypt_data(ciphertext: &[u8], key: &BigInt) -> Result<Vec<u8>, String> {
+    let key_bytes = key.to_bytes_le();
+    let key_bytes_padded = pad_key_to_32_bytes(&key_bytes);
+    let cipher = Aes256Gcm::new(GenericArray::from_slice(&key_bytes_padded));
+    let (nonce, ciphertext) = ciphertext.split_at(12); // Extract the nonce
+    let nonce = GenericArray::from_slice(nonce);
+    let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|e| e.to_string())?;
+    Ok(plaintext)
+}
+
+// Helper function to pad the key to 32 bytes
+fn pad_key_to_32_bytes(key: &[u8]) -> [u8; 32] {
+    let mut key_bytes_padded = [0u8; 32];
+    let len = std::cmp::min(key.len(), 32);
+    key_bytes_padded[..len].copy_from_slice(&key[..len]);
+    key_bytes_padded
 }
