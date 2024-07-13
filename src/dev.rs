@@ -1,13 +1,11 @@
 use mio::net::UdpSocket;
-use crate::tun::TunDevice;
+use crate::{crypto::{generate_public_key, generate_shared_key}, tun::TunDevice};
 use std::{collections::HashMap, net::SocketAddr};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use num_bigint::BigInt;
+use crate::crypto::{encrypt_data, decrypt_data};
 
-// Diffie Hellman Key Exchange implementation
-const DH_MODULUS: &'static str = "23";  // Placeholder values for testing
-const DH_BASE: &'static str = "5";
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Message {
@@ -32,6 +30,7 @@ pub enum Device {
         available_ids : Vec<u8>
     }
 }
+
 
 pub enum SecretData<'a> {
     SharedSecretKey(&'a BigInt), 
@@ -76,6 +75,7 @@ impl Device {
             }
         }
     }
+
 
     pub fn write_tun (&mut self, data: Vec<u8>) -> Result<(), String> {
         match self {
@@ -146,23 +146,25 @@ impl Device {
     // Initiates the handshake by calculating the client public key using Diffie Hellman algorithm and send the request with the public key to the server
     pub fn initiate_handshake (&self) -> Result<(), String> {
         match self {
-            Device::Client { client_socket, server_addr , private_key, ..} => {
-                let p: BigInt = DH_MODULUS.parse().unwrap();
-                let g: BigInt = DH_BASE.parse().unwrap();
+            Device::Client {
+                client_socket,
+                server_addr,
+                private_key,
+                ..
+            } => {
+                let client_public_key = generate_public_key(private_key);
 
-                let client_public_key = g.modpow(private_key, &p);
+                let request_msg = Message::Request { client_public_key }; //create a request message
 
-                let request_msg = Message::Request { client_public_key };
+                let serialized = serde_json::to_string(&request_msg).map_err(|e| e.to_string())?; //serialize the message to json
 
-                let serialized = serde_json::to_string(&request_msg).map_err(|e| e.to_string())?;
+                client_socket.send_to(serialized.as_bytes(), *server_addr).map_err(|e| e.to_string())?;
 
-                client_socket.send_to(serialized.as_bytes(), server_addr.clone()).map_err(|e| e.to_string())?;
-
-                println!("Request sent to the server {}", server_addr);
+                println!("request sent to the server {}", server_addr);
 
                 Ok(())
-            }, 
-            _ => Err("Handshake can be initiated by client only".to_string())
+            }
+            _ => Err("handshake can be initiated by client only".to_string()),
         }
     }
 
@@ -170,12 +172,11 @@ impl Device {
     pub fn process_response (&self, response_msg: Message) -> Result<BigInt, String> {
         match self {
             Device::Client {private_key, tun,..} => {
-                let p: BigInt = DH_MODULUS.parse().unwrap();
-
                 match response_msg {
                     Message::Response { client_id, server_public_key,  } => {
                         tun.up(Some(client_id));
-                        Ok(server_public_key.modpow(private_key, &p))
+                        let shared_secret_key = generate_shared_key(&server_public_key, private_key);
+                        Ok(shared_secret_key)
                     }, 
                     _ => Err("Response message is not a response".to_string())
                 }
@@ -188,12 +189,9 @@ impl Device {
     pub fn process_request (&mut self, client_addr: &SocketAddr, request_msg: Message) -> Result<(u8, BigInt), String> {
         match self {
             Device::Server {server_socket, private_key, available_ids,..} => {
-                let p: BigInt = DH_MODULUS.parse().unwrap();
-                let g: BigInt = DH_BASE.parse().unwrap();
-
                 match request_msg {
                     Message::Request { client_public_key } => {
-                        let server_public_key = g.modpow(private_key, &p);
+                        let server_public_key = generate_public_key(private_key); 
                         match available_ids.pop() {
                             Some(client_id) => {
                                 let response_msg = Message::Response { client_id, server_public_key };
@@ -202,8 +200,10 @@ impl Device {
                                 server_socket.send_to(serialized.as_bytes(), client_addr.clone()).map_err(|e| e.to_string())?;
                                 
                                 println!("Response sent to the client {}", client_addr);
+                                
+                                let shared_secret_key = generate_shared_key(&client_public_key, private_key);
 
-                                Ok((client_id, client_public_key.modpow(private_key, &p)))
+                                Ok((client_id, shared_secret_key))
                             }, 
                             None => {
                                 Err("No space available for new connection".to_string())

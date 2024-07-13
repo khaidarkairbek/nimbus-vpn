@@ -2,6 +2,7 @@ mod comm;
 mod tun; 
 mod dev;
 mod cli; 
+mod crypto;
 
 use std::{net::SocketAddr, process};
 use num_bigint::BigInt;
