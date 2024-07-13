@@ -4,7 +4,7 @@ mod dev;
 mod cli; 
 mod crypto;
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, process};
 use num_bigint::BigInt;
 use comm::{client_side, server_side};
 use clap::Parser;
@@ -26,6 +26,9 @@ fn main () {
         }, 
         Mode::Server { port, key, tun_num }=> {
             let server_addr: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap(); 
+            // the public ip of the server: curl -s https://ifconfig.me
+            let public_addr: String = String::from_utf8(process::Command::new("curl").arg("-s").arg("https://ifconfig.me").output().unwrap().stdout).unwrap(); 
+            println!("Server address is: {:?}", public_addr);
             let server_private_key: BigInt = key.parse().unwrap(); 
             server_side(server_addr, tun_num, server_private_key).unwrap();
         }

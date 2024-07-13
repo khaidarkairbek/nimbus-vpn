@@ -114,10 +114,13 @@ impl TunDevice {
     }
 
     // Brings the tun device up and sets it up using ifconfig to given ip address and MTU constant
-    pub fn up(&self) {
-
+    pub fn up(&self, server_client_id: Option<u8>) {
+        let id = match server_client_id {
+            Some(id) => id, 
+            None => 1
+        }; 
         //  Assign IP addresses to TUN and bring it up
-        let mut status = process::Command::new("ifconfig").arg(format!("utun{}", self.id)).arg(format!("10.20.20.{}", self.id)).arg("10.20.20.1").status().unwrap(); 
+        let mut status = process::Command::new("ifconfig").arg(format!("utun{}", self.id)).arg(format!("10.20.20.{}", id)).arg("10.20.20.1").status().unwrap(); 
         assert!(status.success()); 
 
         // Setting MTU (Maximum Transmission Unit) value to 1380, which is a standard for VPN application
@@ -173,7 +176,7 @@ mod tests {
 
         let tun = TunDevice::create(None).unwrap();
     
-        tun.up();
+        tun.up(None);
     
         println!("Created tun device: {:?}", tun);
 
