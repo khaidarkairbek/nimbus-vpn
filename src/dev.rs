@@ -168,15 +168,21 @@ pub fn write_tun(&mut self, data: Vec<u8>) -> Result<(), String> {
         }
     }
 
-    pub fn read_socket (&mut self) -> Result<Message, String> {
+    pub fn read_socket(&mut self) -> Result<Message, String> {
         match self {
-            Device::Client { client_socket: socket , ..} | Device::Server { server_socket : socket, .. } => {
+            Device::Client { client_socket: socket, shared_secret_key, ..} | Device::Server { server_socket: socket, client_key_map, .. } => {
                 let mut buffer = [0; 2000];
                 let len = socket.recv(&mut buffer).map_err(|e| e.to_string())?;
-                let msg = serde_json::from_slice::<Message>(&buffer[..len]).map_err(|e| e.to_string())?;
-                Ok(msg)
+                if let Some(key) = shared_secret_key {
+                    let decrypted_data = decrypt_data(&buffer[..len], key)?;
+                    let msg = serde_json::from_slice::<Message>(&decrypted_data).map_err(|e| e.to_string())?;
+                    Ok(msg)
+                } else {
+                    let msg = serde_json::from_slice::<Message>(&buffer[..len]).map_err(|e| e.to_string())?;
+                    Ok(msg)
+                }
             }
-        } 
+        }
     }
 
 }
