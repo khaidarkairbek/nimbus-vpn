@@ -158,9 +158,7 @@ impl Device {
 
                 let serialized = serde_json::to_string(&request_msg).map_err(|e| e.to_string())?; //serialize the message to json
 
-                client_socket
-                    .send_to(serialized.as_bytes(), *server_addr) //send the request to the server
-                    .map_err(|e| e.to_string())?;
+                client_socket.send_to(serialized.as_bytes(), *server_addr).map_err(|e| e.to_string())?;
 
                 println!("request sent to the server {}", server_addr);
 
@@ -177,7 +175,7 @@ impl Device {
                 match response_msg {
                     Message::Response { client_id, server_public_key,  } => {
                         tun.up(Some(client_id));
-                        let shared_secret_key = generate_shared_key(server_public_key, private_key);
+                        let shared_secret_key = generate_shared_key(&server_public_key, private_key);
                         Ok(shared_secret_key)
                     }, 
                     _ => Err("Response message is not a response".to_string())
@@ -203,7 +201,7 @@ impl Device {
                                 
                                 println!("Response sent to the client {}", client_addr);
                                 
-                                let shared_secret_key = generate_shared_key(client_public_key, private_key);
+                                let shared_secret_key = generate_shared_key(&client_public_key, private_key);
 
                                 Ok((client_id, shared_secret_key))
                             }, 
@@ -218,70 +216,4 @@ impl Device {
             _ => Err("Request can be sent to server only".to_string())
         }
     }
-
-
-    pub fn write_tun(&mut self, data: Vec<u8>) -> Result<(), String> {
-        match self {
-            Device::Client { tun, shared_secret_key, ..} | Device::Server { tun, client_key_map, .. } => {
-                let encrypted_data = match shared_secret_key {
-                    Some(key) => encrypt_data(&data, key)?,
-                    None => data, // If there's no key, just send the data as-is (for initial handshake, etc.)
-                };
-                let mut bytes_left = encrypted_data.len();
-                while bytes_left > 0 {
-                    let bytes_written = tun.write(&encrypted_data).map_err(|e| e.to_string())?;
-                    bytes_left = bytes_left - bytes_written;
-                }
-                Ok(())
-            }
-        }
-    }
-
-    pub fn read_tun(&mut self, buffer: &mut [u8]) -> Result<usize, String> {
-        match self {
-            Device::Client { tun, shared_secret_key, ..} | Device::Server { tun, client_key_map, .. } => {
-                let len = tun.read(buffer).map_err(|e| e.to_string())?;
-                if let Some(key) = shared_secret_key {
-                    let decrypted_data = decrypt_data(&buffer[..len], key)?;
-                    let data_len = decrypted_data.len();
-                    buffer[..data_len].clone_from_slice(&decrypted_data);
-                    Ok(data_len)
-                } else {
-                    Ok(len)
-                }
-            }
-        }
-    }
-
-    pub fn write_socket(&mut self, data: &[u8]) -> Result<(), String> {
-        match self {
-            Device::Client { client_socket: socket , server_addr, ..} => {
-                let mut bytes_left = data.len(); 
-                while bytes_left > 0 {
-                    let bytes_written = socket.send_to(data, *server_addr).map_err(|e| e.to_string()).unwrap(); 
-                    bytes_left = bytes_left - bytes_written;
-                }
-                Ok(())
-            },
-            _ => Err("Unimplemented yet".to_string())  // TODO: Implement server side logic
-        }
-    }
-
-    pub fn read_socket(&mut self) -> Result<Message, String> {
-        match self {
-            Device::Client { client_socket: socket, shared_secret_key, ..} | Device::Server { server_socket: socket, client_key_map, .. } => {
-                let mut buffer = [0; 2000];
-                let len = socket.recv(&mut buffer).map_err(|e| e.to_string())?;
-                if let Some(key) = shared_secret_key {
-                    let decrypted_data = decrypt_data(&buffer[..len], key)?;
-                    let msg = serde_json::from_slice::<Message>(&decrypted_data).map_err(|e| e.to_string())?;
-                    Ok(msg)
-                } else {
-                    let msg = serde_json::from_slice::<Message>(&buffer[..len]).map_err(|e| e.to_string())?;
-                    Ok(msg)
-                }
-            }
-        }
-    }
-
 }
