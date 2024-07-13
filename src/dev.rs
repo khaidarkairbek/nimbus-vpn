@@ -118,24 +118,34 @@ pub fn process_request (&self, client_addr: &SocketAddr, request_msg: Message) -
 }
 
 
-    pub fn write_tun (&mut self, data: Vec<u8>) -> Result<(), String> {
-        match self {
-            Device::Client { tun, ..} | Device::Server { tun, .. } => {
-                let mut bytes_left = data.len(); 
-                while bytes_left > 0 {
-                    let bytes_written = tun.write(&data).map_err(|e| e.to_string())?; 
-                    bytes_left = bytes_left - bytes_written;
-                }
-                Ok(())
+pub fn write_tun(&mut self, data: Vec<u8>) -> Result<(), String> {
+    match self {
+        Device::Client { tun, shared_secret_key, ..} | Device::Server { tun, client_key_map, .. } => {
+            let encrypted_data = match shared_secret_key {
+                Some(key) => encrypt_data(&data, key)?,
+                None => data, // If there's no key, just send the data as-is (for initial handshake, etc.)
+            };
+            let mut bytes_left = encrypted_data.len();
+            while bytes_left > 0 {
+                let bytes_written = tun.write(&encrypted_data).map_err(|e| e.to_string())?;
+                bytes_left = bytes_left - bytes_written;
             }
+            Ok(())
         }
     }
 
-    pub fn read_tun (&mut self, buffer: &mut [u8]) -> Result<usize, String> {
+    pub fn read_tun(&mut self, buffer: &mut [u8]) -> Result<usize, String> {
         match self {
-            Device::Client { tun, ..} | Device::Server { tun, .. } => {
-                let len = tun.read(buffer).map_err(|e| e.to_string())?; 
-                Ok(len)
+            Device::Client { tun, shared_secret_key, ..} | Device::Server { tun, client_key_map, .. } => {
+                let len = tun.read(buffer).map_err(|e| e.to_string())?;
+                if let Some(key) = shared_secret_key {
+                    let decrypted_data = decrypt_data(&buffer[..len], key)?;
+                    let data_len = decrypted_data.len();
+                    buffer[..data_len].clone_from_slice(&decrypted_data);
+                    Ok(data_len)
+                } else {
+                    Ok(len)
+                }
             }
         }
     }
