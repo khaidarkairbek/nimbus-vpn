@@ -2,8 +2,6 @@ use chacha20poly1305::aead::{Aead, KeyInit, OsRng};
 use chacha20poly1305::aead::generic_array::GenericArray;
 use chacha20poly1305::{AeadCore, ChaCha20Poly1305};
 use num_bigint::BigInt;
-use crate::dev::{Device, DH_MODULUS, DH_BASE, Message}; //import the device enum and constants
-use serde_json;
 
 fn pad_key_to_32_bytes(key: &[u8]) -> [u8; 32] {
     let mut padded_key_bytes = [0u8; 32]; //array of 32 bytes initialized to zero
@@ -33,33 +31,19 @@ pub fn decrypt_data(cipher_text: &[u8], key: &BigInt) -> Result<Vec<u8>, String>
     Ok(plain_text)
 }
 
-//initiates the handshake by calculating the client public key using diffie-hellman algorithm
-//and sending the request with the public key to the server
-pub fn initiate_handshake(device: &Device) -> Result<(), String> {
-    match device {
-        Device::Client {
-            client_socket,
-            server_addr,
-            private_key,
-            ..
-        } => {
-            let p: BigInt = DH_MODULUS.parse().unwrap(); //parse the modulus
-            let g: BigInt = DH_BASE.parse().unwrap(); //parse the base
+// Diffie Hellman Key Exchange implementation
+pub const DH_MODULUS: &'static str = "23";  // Placeholder values for testing
+pub const DH_BASE: &'static str = "5";
 
-            let client_public_key = g.modpow(private_key, &p); //calculate the client's public key
+pub fn generate_public_key(private_key: &BigInt) -> BigInt {
+    let p: BigInt = DH_MODULUS.parse().unwrap(); //parse the modulus
+    let g: BigInt = DH_BASE.parse().unwrap(); //parse the base
 
-            let request_msg = Message::Request { client_public_key }; //create a request message
+    g.modpow(private_key, &p)
+}
 
-            let serialized = serde_json::to_string(&request_msg).map_err(|e| e.to_string())?; //serialize the message to json
+pub fn generate_shared_key(public_key: &BigInt, private_key: &BigInt) -> BigInt {
+    let p: BigInt = DH_MODULUS.parse().unwrap(); //parse the modulus
 
-            client_socket
-                .send_to(serialized.as_bytes(), *server_addr) //send the request to the server
-                .map_err(|e| e.to_string())?;
-
-            println!("request sent to the server {}", server_addr);
-
-            Ok(())
-        }
-        _ => Err("handshake can be initiated by client only".to_string()),
-    }
+    public_key.modpow(private_key, &p)
 }

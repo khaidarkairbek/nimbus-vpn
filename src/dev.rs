@@ -1,5 +1,5 @@
 use mio::net::UdpSocket;
-use crate::tun::TunDevice;
+use crate::{crypto::{generate_public_key, generate_shared_key}, tun::TunDevice};
 use std::{collections::HashMap, net::SocketAddr};
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -30,10 +30,6 @@ pub enum Device {
     }
 }
 
-
-// Diffie Hellman Key Exchange implementation
-pub const DH_MODULUS: &'static str = "23";  // Placeholder values for testing
-pub const DH_BASE: &'static str = "5";
 
 impl Device {
     pub fn set_shared_secret_key (&mut self, new_key: BigInt, client_addr: Option<SocketAddr>) -> Result<(), String>{
@@ -74,63 +70,88 @@ impl Device {
         }
     }
 
+    //initiates the handshake by calculating the client public key using diffie-hellman algorithm
+    //and sending the request with the public key to the server
+    pub fn initiate_handshake(&self) -> Result<(), String> {
+        match self {
+            Device::Client {
+                client_socket,
+                server_addr,
+                private_key,
+                ..
+            } => {
+                let client_public_key = generate_public_key(private_key);
+
+                let request_msg = Message::Request { client_public_key }; //create a request message
+
+                let serialized = serde_json::to_string(&request_msg).map_err(|e| e.to_string())?; //serialize the message to json
+
+                client_socket
+                    .send_to(serialized.as_bytes(), *server_addr) //send the request to the server
+                    .map_err(|e| e.to_string())?;
+
+                println!("request sent to the server {}", server_addr);
+
+                Ok(())
+            }
+            _ => Err("handshake can be initiated by client only".to_string()),
+        }
+    }
+
     // Processes the response from the server after initiating handshake and calculates shared secret key
-pub fn process_response (&self, response_msg: &Message) -> Result<BigInt, String> {
-    match self {
-        Device::Client {private_key, ..} => {
-            let p: BigInt = DH_MODULUS.parse().unwrap();
-
-            match response_msg {
-                Message::Response { server_public_key,  } => {
-                    Ok(server_public_key.modpow(private_key, &p))
-                }, 
-                _ => Err("Response message is not a response".to_string())
-            }
-        }, 
-        _ => Err("Response can be sent to client only".to_string())
+    pub fn process_response (&self, response_msg: &Message) -> Result<BigInt, String> {
+        match self {
+            Device::Client {private_key, ..} => {
+                match response_msg {
+                    Message::Response { server_public_key,  } => {
+                        let shared_secret_key = generate_shared_key(server_public_key, private_key);
+                        Ok(shared_secret_key)
+                    }, 
+                    _ => Err("Response message is not a response".to_string())
+                }
+            }, 
+            _ => Err("Response can be sent to client only".to_string())
+        }
     }
-}
 
-// Processes the request from the client after initiating handshake, sends the response and calculates shared secret key
-pub fn process_request (&self, client_addr: &SocketAddr, request_msg: Message) -> Result<BigInt, String> {
-    match self {
-        Device::Server {server_socket, private_key, ..} => {
-            let p: BigInt = DH_MODULUS.parse().unwrap();
-            let g: BigInt = DH_BASE.parse().unwrap();
+    // Processes the request from the client after initiating handshake, sends the response and calculates shared secret key
+    pub fn process_request (&self, client_addr: &SocketAddr, request_msg: Message) -> Result<BigInt, String> {
+        match self {
+            Device::Server {server_socket, private_key, ..} => {
+                match request_msg {
+                    Message::Request { client_public_key } => {
+                        let server_public_key = generate_public_key(private_key); 
+                        let response_msg = Message::Response { server_public_key };
+                        let serialized = serde_json::to_string(&response_msg).map_err(|e| e.to_string())?;
+                        
+                        server_socket.send_to(serialized.as_bytes(), client_addr.clone()).map_err(|e| e.to_string())?;
+                        
+                        println!("Response sent to the client {}", client_addr);
 
-            match request_msg {
-                Message::Request { client_public_key } => {
-                    let server_public_key = g.modpow(private_key, &p);
-                    let response_msg = Message::Response { server_public_key };
-                    let serialized = serde_json::to_string(&response_msg).map_err(|e| e.to_string())?;
-                    
-                    server_socket.send_to(serialized.as_bytes(), client_addr.clone()).map_err(|e| e.to_string())?;
-                    
-                    println!("Response sent to the client {}", client_addr);
-
-                    Ok(client_public_key.modpow(private_key, &p))
-                },
-                _ => Err("Request message is not a request".to_string())
-            }
-        }, 
-        _ => Err("Request can be sent to server only".to_string())
+                        Ok(client_public_key.modpow(private_key, &p))
+                    },
+                    _ => Err("Request message is not a request".to_string())
+                }
+            }, 
+            _ => Err("Request can be sent to server only".to_string())
+        }
     }
-}
 
 
-pub fn write_tun(&mut self, data: Vec<u8>) -> Result<(), String> {
-    match self {
-        Device::Client { tun, shared_secret_key, ..} | Device::Server { tun, client_key_map, .. } => {
-            let encrypted_data = match shared_secret_key {
-                Some(key) => encrypt_data(&data, key)?,
-                None => data, // If there's no key, just send the data as-is (for initial handshake, etc.)
-            };
-            let mut bytes_left = encrypted_data.len();
-            while bytes_left > 0 {
-                let bytes_written = tun.write(&encrypted_data).map_err(|e| e.to_string())?;
-                bytes_left = bytes_left - bytes_written;
+    pub fn write_tun(&mut self, data: Vec<u8>) -> Result<(), String> {
+        match self {
+            Device::Client { tun, shared_secret_key, ..} | Device::Server { tun, client_key_map, .. } => {
+                let encrypted_data = match shared_secret_key {
+                    Some(key) => encrypt_data(&data, key)?,
+                    None => data, // If there's no key, just send the data as-is (for initial handshake, etc.)
+                };
+                let mut bytes_left = encrypted_data.len();
+                while bytes_left > 0 {
+                    let bytes_written = tun.write(&encrypted_data).map_err(|e| e.to_string())?;
+                    bytes_left = bytes_left - bytes_written;
+                }
+                Ok(())
             }
-            Ok(())
         }
     }
 
@@ -152,14 +173,10 @@ pub fn write_tun(&mut self, data: Vec<u8>) -> Result<(), String> {
 
     pub fn write_socket(&mut self, data: &[u8]) -> Result<(), String> {
         match self {
-            Device::Client { client_socket: socket, server_addr, shared_secret_key, ..} => {
-                let encrypted_data = match shared_secret_key {
-                    Some(key) => encrypt_data(data, key)?,
-                    None => data.to_vec(), // If there's no key, just send the data as-is
-                };
-                let mut bytes_left = encrypted_data.len();
+            Device::Client { client_socket: socket , server_addr, ..} => {
+                let mut bytes_left = data.len(); 
                 while bytes_left > 0 {
-                    let bytes_written = socket.send_to(&encrypted_data, *server_addr).map_err(|e| e.to_string())?;
+                    let bytes_written = socket.send_to(data, *server_addr).map_err(|e| e.to_string()).unwrap(); 
                     bytes_left = bytes_left - bytes_written;
                 }
                 Ok(())
