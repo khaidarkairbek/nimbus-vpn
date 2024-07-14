@@ -2,7 +2,7 @@ use mio::{net::UdpSocket, unix::SourceFd};
 use std::{net::SocketAddr, collections::HashMap, os::fd::AsRawFd, process, str};
 use num_bigint::BigInt;
 use mio::{Events, Poll as Mio_Poll, Interest, Token};
-use crate::dev::{Device, Message};
+use crate::dev::{Device, Message, SecretData};
 use crate::tun::TunDevice;
 
 pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_private_key : BigInt) -> Result<(), String> {   
@@ -55,9 +55,17 @@ pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_priva
                             println!("Shared secret key is {} with the client: {}", shared_secret_key, client_addr);
                             server.set_shared_secret_key(shared_secret_key, Some((client_id, client_addr)))?; 
                         }, 
-                        Message::PayLoad { data } => {
-                            println!("IPpacket received: {:?}", data);
-                            server.write_tun(data)?;
+                        Message::PayLoad { client_id, data } => {
+                            let client_info = server.get_shared_secret_key(Some(client_id)); 
+                            match client_info {
+                                Ok(SecretData::SharedSecretClientData(address, shared_key)) => {
+                                    // TODO: Decrypt data here with shared key
+                                    println!("IP packet received: {:?}", data);
+                                    server.write_tun(data)?;
+                                }, 
+                                Err(e) => eprintln!("The error: {}", e),
+                                _ => ()
+                            }
                         }
                         _ => ()  
                     }
@@ -70,16 +78,13 @@ pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_priva
                             if len > 0  {
                                 // the destination ip address is 16th to 20th bytes in ip packet => internal client ip address of the tun device
                                 let client_internal_tun_address = &data[15..19]; 
-
                                 // the client tun device configuration ifconfig utun* address1 address2, where address1 is internal destination ip address of the form 10.20.20.client_id
                                 let client_id = client_internal_tun_address[3]; 
-                                // TODO: Encryption/decryption protocols need to be established
+                                // TODO: Encrypt data here with shared key
+                                let msg = Message::PayLoad { client_id: client_id, data: data.to_vec() }; 
+                                let serialized = serde_json::to_string::<Message>(&msg).map_err(|e| e.to_string())?;
                                 println!("IP packet sent: {:?}", &buffer[..len]);
-                                match server.write_socket(&buffer[..len], Some(client_id)) {
-                                    Err(_) => (), 
-                                    _ => ()
-                                };
-                                // Implement TUN logic
+                                server.write_socket(serialized.as_bytes(), Some(client_id)).map_err(|e| e.to_string())?;
                             }
                         }, 
                         Err(_) => ()
@@ -103,7 +108,7 @@ pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: 
     poll.registry().register(&mut client_socket, Token(0), Interest::READABLE).map_err(|e| e.to_string())?;
     poll.registry().register(&mut tun_socket, Token(1), Interest::READABLE | Interest::WRITABLE).map_err(|e| e.to_string())?; 
 
-    let mut client = Device::Client { client_socket: client_socket, server_addr: server_addr, tun: tun, shared_secret_key: None, private_key: client_private_key}; 
+    let mut client = Device::Client { client_socket: client_socket, server_addr: server_addr, tun: tun, shared_secret_key: None, private_key: client_private_key, id: None}; 
 
     client.initiate_handshake()?;
 
@@ -169,8 +174,10 @@ pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: 
                                 panic!("Only implemented for MacOS and Linux");
                             }
                         }, 
-                        Message::PayLoad { data } => {
-                            println!("IPpacket received: {:?}", data);
+                        Message::PayLoad { client_id, data } => {
+                            let shared_key = client.get_shared_secret_key(None); 
+                            // TODO: Decrypt data here with shared key
+                            println!("IP packet received: {:?}", data);
                             client.write_tun(data)?;
                         }
                         _ => ()  // Implement data transmission
@@ -180,15 +187,25 @@ pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: 
                     let mut buffer = [0u8; 2000];
                     match client.read_tun(&mut buffer) {
                         Ok(len ) => {
-
+                            let data = &buffer[..len]; 
                             if len > 0  {
-                                // TODO: Encryption/decryption protocols need to be established
-                                println!("IP packet sent: {:?}", &buffer[..len]); 
+                                let client_id = match client {
+                                    Device::Client { id, .. } => id, 
+                                    _ => None
+                                };
+                                match client_id {
+                                    Some(id) => {
+                                        let shared_key = client.get_shared_secret_key(None); 
+                                        // TODO: Encrypt data here with shared key
+                                        let msg = Message::PayLoad { client_id: id, data: data.to_vec() }; 
+                                        let serialized = serde_json::to_string::<Message>(&msg).map_err(|e| e.to_string())?;
+                                        println!("IP packet sent: {:?}", &buffer[..len]); 
 
-                                client.write_socket(&buffer[..len], None)?;
-                                // Implement TUN logic
+                                        client.write_socket(serialized.as_bytes(), None)?;
+                                    }, 
+                                    None => {eprintln!("Connection not yet set between client and server")}
+                                }
                             }
-                            
                         }, 
                         Err(_) => ()
                     };
@@ -218,7 +235,7 @@ mod tests {
         let mut events = Events::with_capacity(1024);
         poll.registry().register(&mut client_socket, Token(0), Interest::READABLE).unwrap();
 
-        let client = Device::Client {client_socket: client_socket, server_addr: server_addr, tun : tun, shared_secret_key : None, private_key : client_private_key};
+        let client = Device::Client {client_socket: client_socket, server_addr: server_addr, tun : tun, shared_secret_key : None, private_key : client_private_key, id: None};
         client.initiate_handshake().unwrap();
 
         let mut shared_secret_key = None;
