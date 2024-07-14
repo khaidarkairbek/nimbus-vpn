@@ -32,8 +32,8 @@ pub fn decrypt_data(cipher_text: &[u8], key: &BigInt) -> Result<Vec<u8>, String>
 }
 
 // Diffie Hellman Key Exchange implementation
-pub const DH_MODULUS: &'static str = "23";  // Placeholder values for testing
-pub const DH_BASE: &'static str = "5";
+const DH_MODULUS: &'static str = "23";  // Placeholder values for testing
+const DH_BASE: &'static str = "5";
 
 pub fn generate_public_key(private_key: &BigInt) -> BigInt {
     let p: BigInt = DH_MODULUS.parse().unwrap(); //parse the modulus

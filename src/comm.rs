@@ -1,5 +1,5 @@
 use mio::{net::UdpSocket, unix::SourceFd};
-use std::{net::SocketAddr, collections::HashMap, os::fd::AsRawFd, process};
+use std::{net::SocketAddr, collections::HashMap, os::fd::AsRawFd, process, str};
 use num_bigint::BigInt;
 use mio::{Events, Poll as Mio_Poll, Interest, Token};
 use crate::dev::{Device, Message};
@@ -11,8 +11,15 @@ pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_priva
     // Enable ipv4 forwarding command: 
     // Linux: sysctl -w net.ipv4.ip_forward=1
     // MacOS: sysctl -w net.inet.ip.forwarding=1
-    let status = process::Command::new("sysctl").arg("-w").arg("net.inet.ip.forwarding=1").status().unwrap(); 
-    assert!(status.success());
+    if cfg!(target_os = "macos") {
+        let status = process::Command::new("sysctl").arg("-w").arg("net.inet.ip.forwarding=1").status().unwrap(); 
+        assert!(status.success());
+    } else if cfg!(target_os = "linux") {
+        let status = process::Command::new("sysctl").arg("-w").arg("net.ipv4.ip_forward=1").status().unwrap(); 
+        assert!(status.success());
+    }else {
+        panic!("Only implemented for MacOS and Linux");
+    }
 
 
     let tun = TunDevice::create(tun_num).map_err(|e| e.to_string())?; 
@@ -137,9 +144,30 @@ pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: 
                             println!("Shared secret key is {}", shared_secret_key);
                             client.set_shared_secret_key(shared_secret_key, None)?;
 
-                            // Set the default gateway to Tun device's remote address
-                            assert!(process::Command::new("route").arg("delete").arg("default").status().unwrap().success()); 
-                            assert!(process::Command::new("route").arg("add").arg("default").arg("10.20.20.1").status().unwrap().success()); 
+                            if cfg!(target_os = "macos") {
+                                // Set the default gateway to Tun device's remote address
+                                assert!(process::Command::new("route").arg("delete").arg("default").status().unwrap().success()); 
+                                assert!(process::Command::new("route").arg("add").arg("default").arg("10.20.20.1").status().unwrap().success()); 
+                            } else if cfg!(target_os = "linux") {
+                                let default_gw_output = process::Command::new("ip").arg("route").arg("show").arg("default").output().unwrap(); 
+                                assert!(default_gw_output.status.success()); 
+                                let mut words = str::from_utf8(&default_gw_output.stdout).unwrap().split_whitespace();
+                                let mut interface = None;
+                                let mut gateway = None;
+
+                                while let Some(word) = words.next() {
+                                    match word {
+                                        "dev" => interface = words.next(),
+                                        "via" => gateway = words.next(),
+                                        _ => {}
+                                    }
+                                }
+                                println!("Original default gateway : {:?}", gateway);
+                                assert!(process::Command::new("ip").arg("route").arg("del").arg("default").arg("via").arg(gateway.unwrap()).status().unwrap().success()); 
+                                assert!(process::Command::new("ip").arg("route").arg("add").arg("default").arg("via").arg("10.20.20.1").arg("dev").arg(interface.unwrap()).status().unwrap().success()); 
+                            } else {
+                                panic!("Only implemented for MacOS and Linux");
+                            }
                         }, 
                         Message::PayLoad { data } => {
                             println!("IPpacket received: {:?}", data);
