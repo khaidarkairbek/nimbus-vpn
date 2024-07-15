@@ -4,14 +4,13 @@ use std::{collections::HashMap, net::SocketAddr};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use num_bigint::BigInt;
-use crate::crypto::{encrypt_data, decrypt_data};
 
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Message {
     Request { client_public_key: BigInt },
     Response { client_id: u8, server_public_key: BigInt },
-    PayLoad { data: Vec<u8> }
+    PayLoad { client_id: u8, data: Vec<u8> }
 }
 
 pub enum Device {
@@ -20,7 +19,8 @@ pub enum Device {
         server_addr : SocketAddr, 
         tun : TunDevice,
         shared_secret_key : Option<BigInt>, 
-        private_key : BigInt
+        private_key : BigInt, 
+        id: Option<u8>
     }, 
     Server {
         server_socket : UdpSocket, 
