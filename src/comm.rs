@@ -17,7 +17,7 @@ pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_priva
     } else if cfg!(target_os = "linux") {
         let status = process::Command::new("sysctl").arg("-w").arg("net.ipv4.ip_forward=1").status().unwrap(); 
         assert!(status.success());
-    }else {
+    } else {
         panic!("Only implemented for MacOS and Linux");
     }
 
