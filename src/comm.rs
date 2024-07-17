@@ -4,9 +4,14 @@ use num_bigint::BigInt;
 use mio::{Events, Poll as Mio_Poll, Interest, Token};
 use crate::dev::{Device, Message, SecretData};
 use crate::tun::TunDevice;
+use anyhow::Result;
+use crate::error::{
+    SocketError::*, 
+    CommError::*
+};
 
-pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_private_key : BigInt) -> Result<(), String> {   
-    let mut server_socket = UdpSocket::bind(server_addr).map_err(|e| e.to_string())?;
+pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_private_key : BigInt) -> Result<()> {   
+    let mut server_socket = UdpSocket::bind(server_addr).map_err(|e| SocketBindError(e.to_string()))?;
 
     // Enable ipv4 forwarding command: 
     // Linux: sysctl -w net.ipv4.ip_forward=1
@@ -18,20 +23,20 @@ pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_priva
         let status = process::Command::new("sysctl").arg("-w").arg("net.ipv4.ip_forward=1").status().unwrap(); 
         assert!(status.success());
     } else {
-        panic!("Only implemented for MacOS and Linux");
+        unimplemented!()
     }
 
 
-    let tun = TunDevice::create(tun_num).map_err(|e| e.to_string())?; 
+    let tun = TunDevice::create(tun_num)?; 
     // The server_client_id of the tun is not relevant for server
     tun.up(None);
     let tun_raw_fd = tun.file.as_raw_fd(); 
     let mut tun_socket = SourceFd(&tun_raw_fd);
 
-    let mut poll = Mio_Poll::new().map_err(|e| e.to_string())?; 
+    let mut poll = Mio_Poll::new()?; 
     let mut events = Events::with_capacity(1024); 
-    poll.registry().register(&mut server_socket, Token(0), Interest::READABLE).map_err(|e| e.to_string())?;
-    poll.registry().register(&mut tun_socket, Token(1), Interest::READABLE | Interest::WRITABLE).map_err(|e| e.to_string())?; 
+    poll.registry().register(&mut server_socket, Token(0), Interest::READABLE).map_err(|_| MioRegistryError)?;
+    poll.registry().register(&mut tun_socket, Token(1), Interest::READABLE | Interest::WRITABLE).map_err(|_| MioRegistryError)?;
 
     let available_ids: Vec<u8> = (2..101).collect();  //allow 100 connections established between server and client
 
@@ -44,7 +49,7 @@ pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_priva
     }; 
 
     loop {
-        poll.poll(&mut events, None).map_err(|e| e.to_string())?; // Replace with async tokio 
+        poll.poll(&mut events, None).map_err(|_| MioPollingError)?; // Replace with async tokio 
         for event in &events {
             match event.token() {
                 Token(0) => { 
@@ -82,9 +87,9 @@ pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_priva
                                 let client_id = client_internal_tun_address[3]; 
                                 // TODO: Encrypt data here with shared key
                                 let msg = Message::PayLoad { client_id: client_id, data: data.to_vec() }; 
-                                let serialized = serde_json::to_string::<Message>(&msg).map_err(|e| e.to_string())?;
+                                let serialized = serde_json::to_string::<Message>(&msg).map_err(|e| SerialError(e.to_string()))?;
                                 println!("IP packet sent: {:?}", &buffer[..len]);
-                                server.write_socket(serialized.as_bytes(), Some(client_id)).map_err(|e| e.to_string())?;
+                                server.write_socket(serialized.as_bytes(), Some(client_id))?;
                             }
                         }, 
                         Err(_) => ()
@@ -96,17 +101,17 @@ pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_priva
     }
 }
 
-pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: Option<u8>, client_private_key: BigInt ) -> Result<(), String> {
-    let mut client_socket = UdpSocket::bind(client_addr).map_err(|e| e.to_string())?;
+pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: Option<u8>, client_private_key: BigInt ) -> Result<()> {
+    let mut client_socket = UdpSocket::bind(client_addr).map_err(|e| SocketBindError(e.to_string()))?;
 
-    let tun = TunDevice::create(tun_num).map_err(|e| e.to_string())?; 
+    let tun = TunDevice::create(tun_num)?; 
     let tun_raw_fd = tun.file.as_raw_fd(); 
     let mut tun_socket = SourceFd(&tun_raw_fd);
 
-    let mut poll = Mio_Poll::new().map_err(|e| e.to_string())?; 
+    let mut poll = Mio_Poll::new().map_err(|_| MioInitError)?; 
     let mut events = Events::with_capacity(1024); 
-    poll.registry().register(&mut client_socket, Token(0), Interest::READABLE).map_err(|e| e.to_string())?;
-    poll.registry().register(&mut tun_socket, Token(1), Interest::READABLE | Interest::WRITABLE).map_err(|e| e.to_string())?; 
+    poll.registry().register(&mut client_socket, Token(0), Interest::READABLE).map_err(|_| MioRegistryError)?;
+    poll.registry().register(&mut tun_socket, Token(1), Interest::READABLE | Interest::WRITABLE).map_err(|_| MioRegistryError)?; 
 
     let mut client = Device::Client { client_socket: client_socket, server_addr: server_addr, tun: tun, shared_secret_key: None, private_key: client_private_key, id: None}; 
 
@@ -138,7 +143,7 @@ pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: 
     // TODO: Need a way to revert back to original default gateway in case of program exit, due to interruptions such as ctrl + c or crashes
 
     loop {
-        poll.poll(&mut events, None).map_err(|e| e.to_string())?; // Replace with async tokio 
+        poll.poll(&mut events, None).map_err(|_| MioPollingError)?; // Replace with async tokio 
         for event in &events {
             match event.token() {
                 Token(0) => { 
@@ -171,11 +176,11 @@ pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: 
                                 assert!(process::Command::new("ip").arg("route").arg("del").arg("default").arg("via").arg(gateway.unwrap()).status().unwrap().success()); 
                                 assert!(process::Command::new("ip").arg("route").arg("add").arg("default").arg("via").arg("10.20.20.1").arg("dev").arg(interface.unwrap()).status().unwrap().success()); 
                             } else {
-                                panic!("Only implemented for MacOS and Linux");
+                                unimplemented!();
                             }
                         }, 
                         Message::PayLoad { client_id, data } => {
-                            let shared_key = client.get_shared_secret_key(None); 
+                            let shared_key = client.get_shared_secret_key(None)?; 
                             // TODO: Decrypt data here with shared key
                             println!("IP packet received: {:?}", data);
                             client.write_tun(data)?;
@@ -198,7 +203,7 @@ pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: 
                                         let shared_key = client.get_shared_secret_key(None); 
                                         // TODO: Encrypt data here with shared key
                                         let msg = Message::PayLoad { client_id: id, data: data.to_vec() }; 
-                                        let serialized = serde_json::to_string::<Message>(&msg).map_err(|e| e.to_string())?;
+                                        let serialized = serde_json::to_string::<Message>(&msg).map_err(|e| SerialError(e.to_string()))?;
                                         println!("IP packet sent: {:?}", &buffer[..len]); 
 
                                         client.write_socket(serialized.as_bytes(), None)?;

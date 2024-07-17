@@ -2,6 +2,9 @@ use chacha20poly1305::aead::{Aead, KeyInit, OsRng};
 use chacha20poly1305::aead::generic_array::GenericArray;
 use chacha20poly1305::{AeadCore, ChaCha20Poly1305};
 use num_bigint::BigInt;
+use anyhow::Result; 
+
+use crate::error::CryptoError::*; 
 
 // Diffie Hellman Key Exchange implementation
 const DH_MODULUS: &'static str = "23";  // Placeholder values for testing
@@ -27,24 +30,24 @@ fn pad_key_to_32_bytes(key: &[u8]) -> [u8; 32] {
     padded_key_bytes
 }
 
-pub fn encrypt_data(data: &[u8], key: &BigInt) -> Result<Vec<u8>, String> {
+pub fn encrypt_data(data: &[u8], key: &BigInt) -> Result<Vec<u8>> {
     let (_, key_in_bytes) = key.to_bytes_le(); //convert bigint key to a byte array (extract vec<u8>)
     let key_bytes_pad = pad_key_to_32_bytes(&key_in_bytes); //pad key to 32 bytes
     let cipher = ChaCha20Poly1305::new(GenericArray::from_slice(&key_bytes_pad)); //create chacha20-poly1305 instance with the padded key
     let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng); //generate random nonce
-    let cipher_text = cipher.encrypt(&nonce, data).map_err(|e| e.to_string())?; //encrypt the data with generated nonce
+    let cipher_text = cipher.encrypt(&nonce, data).map_err(|e| EncryptError(e.to_string()))?; //encrypt the data with generated nonce
     let mut result = nonce.to_vec(); //combine the nonce and ciphertext into a single vector
     result.extend(cipher_text);
     Ok(result)
 }
 
-pub fn decrypt_data(cipher_text: &[u8], key: &BigInt) -> Result<Vec<u8>, String> {
+pub fn decrypt_data(cipher_text: &[u8], key: &BigInt) -> Result<Vec<u8>> {
     let (_, key_in_bytes) = key.to_bytes_le(); //convert bigint key to a byte array (extract vec<u8>)
     let key_bytes_pad = pad_key_to_32_bytes(&key_in_bytes); //pad key to 32 bytes
     let cipher = ChaCha20Poly1305::new(GenericArray::from_slice(&key_bytes_pad)); //create chacha20-poly1305 instance with the padded key
     let (nonce, cipher_text) = cipher_text.split_at(12); //split the cipher text into nonce and actual ciphertext
     let nonce = GenericArray::from_slice(nonce);
-    let plain_text = cipher.decrypt(nonce, cipher_text).map_err(|e| e.to_string())?; //decrypt the ciphertext with the nonce
+    let plain_text = cipher.decrypt(nonce, cipher_text).map_err(|e| DecryptError(e.to_string()))?; //decrypt the ciphertext with the nonce
     Ok(plain_text)
 }
 
