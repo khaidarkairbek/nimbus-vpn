@@ -6,8 +6,7 @@ use crate::dev::{Device, Message, SecretData};
 use crate::tun::TunDevice;
 use anyhow::Result;
 use crate::error::{
-    SocketError::*, 
-    CommError::*
+    ClientError, CommError::*, ServerError, SocketError::*
 };
 
 pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_private_key : BigInt) -> Result<()> {   
@@ -89,7 +88,10 @@ pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_priva
                                 let msg = Message::PayLoad { client_id: client_id, data: data.to_vec() }; 
                                 let serialized = serde_json::to_string::<Message>(&msg).map_err(|e| SerialError(e.to_string()))?;
                                 println!("IP packet sent: {:?}", &buffer[..len]);
-                                server.write_socket(serialized.as_bytes(), Some(client_id))?;
+                                match server.write_socket(serialized.as_bytes(), Some(client_id)) {
+                                    Err(e) => println!("Error: {:?}", e), 
+                                    _ => ()
+                                };
                             }
                         }, 
                         Err(_) => ()
@@ -206,7 +208,10 @@ pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: 
                                         let serialized = serde_json::to_string::<Message>(&msg).map_err(|e| SerialError(e.to_string()))?;
                                         println!("IP packet sent: {:?}", &buffer[..len]); 
 
-                                        client.write_socket(serialized.as_bytes(), None)?;
+                                        match client.write_socket(serialized.as_bytes(), None) {
+                                            Err(e) => println!("Error: {:?}", e), 
+                                            _ => ()
+                                        };
                                     }, 
                                     None => {eprintln!("Connection not yet set between client and server")}
                                 }
