@@ -1,6 +1,12 @@
 use std::{fs::{self, File}, io::{Error, Read, Write}, mem, os::fd::{AsRawFd, FromRawFd}, path::Path, process};
 use libc::{self, __c_anonymous_ifr_ifru, ifreq};
 use nix::ioctl_write_ptr; 
+use anyhow::{Result, bail, anyhow};
+
+use crate::error::{
+    TunInitError::*, 
+    TunOperationError::*
+};
 
 // The controller address structure is used to establish 
 // contact between a user client and a kernel controller.
@@ -34,7 +40,7 @@ const MTU: &'static str = "1380";
 impl TunDevice {
     #[cfg(target_os = "macos")]
     // Creates the TUN device of specified number
-    pub fn create(tun_num: Option<u8>) -> Result<TunDevice, Error>{
+    pub fn create(tun_num: Option<u8>) -> Result<TunDevice>{
         match tun_num {
             None => {
                 let mut num = 0; 
@@ -60,8 +66,7 @@ impl TunDevice {
                 let sock_fd = unsafe {libc::socket(DOMAIN, TY, PROTOCOL)};
 
                 if sock_fd == -1 {
-                    eprintln!("Problem opening a socket"); 
-                    return Err(Error::last_os_error());
+                    bail!(TunSocketOpenError(Error::last_os_error()));
                 };
 
                 let file = unsafe{std::fs::File::from_raw_fd(sock_fd)};
@@ -79,8 +84,7 @@ impl TunDevice {
                 }; 
 
                 if unsafe {libc::ioctl(file.as_raw_fd(), libc::CTLIOCGINFO, &mut ctl_info)} == -1 {  // Getting kernel control id, break if not succesfull
-                    eprintln!("Problem getting kernel control id");
-                    return Err(Error::last_os_error());
+                    bail!(KernelCtrlIdError(Error::last_os_error()));
                 };
 
                 // Instantiate the kernel control connection data
@@ -95,13 +99,11 @@ impl TunDevice {
 
                 // Connect to the kernel control
                 if unsafe {libc::connect(file.as_raw_fd(), &sockaddr_ctl as *const _ as *const libc::sockaddr, mem::size_of_val(&sockaddr_ctl) as u32)} == -1 {
-                    eprintln!("Problem connecting to the socket");
-                    return Err(Error::last_os_error());
+                    bail!(TunSocketConnectError(Error::last_os_error()));
                 }
 
                 if unsafe {libc::fcntl(file.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK)} == -1 {
-                    eprintln!("Problem setting the file descriptor to non-blocking mode");
-                    return Err(Error::last_os_error());
+                    bail!(NonBlockError(Error::last_os_error()));
                 }
 
                 println!("Tun connected ");
@@ -115,7 +117,8 @@ impl TunDevice {
     }
 
     #[cfg(target_os = "linux")]
-    pub fn create(tun_num: Option<u8>) -> Result<TunDevice, Error> {
+    pub fn create(tun_num: Option<u8>) -> Result<TunDevice> {
+
         match tun_num {
             None => {
                 let mut num = 0; 
@@ -164,8 +167,7 @@ impl TunDevice {
                 const TUN_IOC_SET_IFF: u8 = 202;
                 ioctl_write_ptr!(tun_set_iff, TUN_IOC_MAGIC, TUN_IOC_SET_IFF, ifreq);
                 if unsafe {tun_set_iff(file.as_raw_fd(), &mut ifr)}.is_err() {
-                    eprintln!("Problem getting kernel control id");
-                    return Err(Error::last_os_error());
+                    bail!(KernelCtrlIdError(Error::last_os_error()))
                 }
 
                 println!("Tun connected ");
@@ -210,7 +212,7 @@ impl TunDevice {
 
     #[cfg(target_os = "macos")]
     // Write the data into tun device from the buffer, returns the length of the written data or Error
-    pub fn write(&mut self, buffer : &[u8]) -> Result<usize, std::io::Error>{
+    pub fn write(&mut self, buffer : &[u8]) -> Result<usize>{
         let mut packet = match buffer[0] & 0xf {
             6 => vec![0, 0, 0, 10],   // 4 byte header for ipv6 packet on MacOS
             _ => vec![0, 0, 0, 2]     // 4 byte header for ipv4 packet on MacOS
@@ -220,19 +222,20 @@ impl TunDevice {
 
         match self.file.write(&packet) {
             Ok(len) => if len > 4 { Ok(len - 4) } else { Ok(0) }, 
-            Err(e) => Err(e)
+            Err(e) => bail!(TunWriteError(e))
         }
     }
 
     #[cfg(target_os = "linux")]
     // Write the data into tun device from the buffer, returns the length of the written data or Error
-    pub fn write(&mut self, buffer : &[u8]) -> Result<usize, std::io::Error>{
-        self.file.write(buffer)
+    pub fn write(&mut self, buffer : &[u8]) -> Result<usize>{
+        self.file.write(buffer).map_err(|e| anyhow!(TunWriteError(e)))
     }
 
     #[cfg(target_os = "macos")]
     // Read the data from tun device into the buffer, returns the length of the read data or Error
-    pub fn read(&mut self, buffer : &mut [u8]) -> Result<usize, std::io::Error> {
+    pub fn read(&mut self, buffer : &mut [u8]) -> Result<usize> {
+
         let mut packet = [0; 2000];  // the regular MTU is about 1500, so 2000 should be sufficient
 
         match self.file.read(&mut packet) {
@@ -246,14 +249,14 @@ impl TunDevice {
                 buffer[..data_len].clone_from_slice(data);  // writing the data into the beginning of the buffer
                 Ok(data_len)
             },
-            Err(e) => Err(e)
+            Err(e) => bail!(TunReadError(e))
         }
     }
 
     #[cfg(target_os = "linux")]
     // Read the data from tun device into the buffer, returns the length of the read data or Error
-    pub fn read(&mut self, buffer : &mut [u8]) -> Result<usize, std::io::Error> {
-        self.file.read(buffer)
+    pub fn read(&mut self, buffer : &mut [u8]) -> Result<usize> {
+        self.file.read(buffer).map_err(|e| anyhow!(TunReadError(e)))
     }
 }
 
