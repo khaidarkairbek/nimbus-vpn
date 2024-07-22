@@ -1,6 +1,5 @@
 use std::{fs::{self, File}, io::{Error, Read, Write}, mem, os::fd::{AsRawFd, FromRawFd}, path::Path, process};
-use libc::{self, __c_anonymous_ifr_ifru, ifreq};
-use nix::ioctl_write_ptr; 
+use libc::{self, __c_anonymous_ifr_ifru};
 use anyhow::{Result, bail, anyhow};
 
 use crate::error::{
@@ -118,10 +117,9 @@ impl TunDevice {
 
     #[cfg(target_os = "linux")]
     pub fn create(tun_num: Option<u8>) -> Result<TunDevice> {
-
         match tun_num {
             None => {
-                let mut num = 0; 
+                let mut num = 1; 
                 loop {
 
                     if num == 255 {
@@ -163,10 +161,10 @@ impl TunDevice {
                 ifr.ifr_name[..tun_name.len()].copy_from_slice(&buffer); 
 
                 // #define TUNSETIFF     _IOW('T', 202, int)
-                const TUN_IOC_MAGIC: u8 = 'T' as u8;
+                const TUN_IOC_MAGIC: u8 = b'T' as u8;
                 const TUN_IOC_SET_IFF: u8 = 202;
-                ioctl_write_ptr!(tun_set_iff, TUN_IOC_MAGIC, TUN_IOC_SET_IFF, ifreq);
-                if unsafe {tun_set_iff(file.as_raw_fd(), &mut ifr)}.is_err() {
+                const TUNSETIFF: libc::c_ulong = 0x400454ca;
+                if unsafe {libc::ioctl(file.as_raw_fd(), TUNSETIFF, &mut ifr)} == -1 {
                     bail!(KernelCtrlIdError(Error::last_os_error()))
                 }
 
@@ -202,11 +200,11 @@ impl TunDevice {
             Some(id) => id, 
             None => 1
         };
-        let mut status = process::Command::new("ifconfig").arg(format!("tun{}", self.id)).arg(format!("10.20.20.{}", id)).status().unwrap(); 
+        let mut status = process::Command::new("ip").arg("addr").arg("add").arg(format!("10.20.20.{}/24", id)).arg("dev").arg(format!("tun{}", self.id)).status().unwrap(); 
         assert!(status.success());
 
         // Setting MTU (Maximum Transmission Unit) value to 1380, which is a standard for VPN application
-        status = process::Command::new("ifconfig").arg(format!("tun{}", self.id)).arg("mtu").arg(MTU).arg("up").status().unwrap();
+        status = process::Command::new("ip").arg("link").arg("set").arg("dev").arg(format!("tun{}", self.id)).arg("mtu").arg(MTU).arg("up").status().unwrap();
         assert!(status.success());
     }
 

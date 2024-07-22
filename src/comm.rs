@@ -6,8 +6,7 @@ use crate::dev::{Device, Message, SecretData};
 use crate::tun::TunDevice;
 use anyhow::Result;
 use crate::error::{
-    SocketError::*, 
-    CommError::*
+    ClientError, CommError::*, ServerError, SocketError::*
 };
 
 pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_private_key : BigInt) -> Result<()> {   
@@ -53,26 +52,30 @@ pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_priva
         for event in &events {
             match event.token() {
                 Token(0) => { 
-                    let (client_addr, msg) = server.read_socket()?;
-                    match msg {
-                        Message::Request { .. } => {
-                            let (client_id, shared_secret_key) = server.process_request(&client_addr, msg)?; 
-                            println!("Shared secret key is {} with the client: {}", shared_secret_key, client_addr);
-                            server.set_shared_secret_key(shared_secret_key, Some((client_id, client_addr)))?; 
-                        }, 
-                        Message::PayLoad { client_id, data } => {
-                            let client_info = server.get_shared_secret_key(Some(client_id)); 
-                            match client_info {
-                                Ok(SecretData::SharedSecretClientData(address, shared_key)) => {
-                                    // TODO: Decrypt data here with shared key
-                                    println!("IP packet received: {:?}", data);
-                                    server.write_tun(data)?;
+                    match server.read_socket(){
+                        Ok((client_addr, msg)) => {
+                            match msg {
+                                Message::Request { .. } => {
+                                    let (client_id, shared_secret_key) = server.process_request(&client_addr, msg)?; 
+                                    println!("Shared secret key is {} with the client: {}", shared_secret_key, client_addr);
+                                    server.set_shared_secret_key(shared_secret_key, Some((client_id, client_addr)))?; 
                                 }, 
-                                Err(e) => eprintln!("The error: {}", e),
-                                _ => ()
+                                Message::PayLoad { client_id, data } => {
+                                    let client_info = server.get_shared_secret_key(Some(client_id)); 
+                                    match client_info {
+                                        Ok(SecretData::SharedSecretClientData(address, shared_key)) => {
+                                            // TODO: Decrypt data here with shared key
+                                            println!("IP packet received: {:?}", data);
+                                            server.write_tun(data)?;
+                                        }, 
+                                        Err(e) => eprintln!("The error: {}", e),
+                                        _ => ()
+                                    }
+                                }
+                                _ => ()  
                             }
-                        }
-                        _ => ()  
+                        }, 
+                        Err(e) => eprintln!("The error: {}", e)
                     }
                 }, 
                 Token(1) => {
@@ -89,10 +92,13 @@ pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_priva
                                 let msg = Message::PayLoad { client_id: client_id, data: data.to_vec() }; 
                                 let serialized = serde_json::to_string::<Message>(&msg).map_err(|e| SerialError(e.to_string()))?;
                                 println!("IP packet sent: {:?}", &buffer[..len]);
-                                server.write_socket(serialized.as_bytes(), Some(client_id))?;
+                                match server.write_socket(serialized.as_bytes(), Some(client_id)) {
+                                    Err(e) => println!("Error: {:?}", e), 
+                                    _ => ()
+                                };
                             }
                         }, 
-                        Err(_) => ()
+                        Err(e) => eprintln!("The error: {}", e)
                     };
                 }, 
                 _ => ()
@@ -147,45 +153,25 @@ pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: 
         for event in &events {
             match event.token() {
                 Token(0) => { 
-                    let msg = client.read_socket()?.1;
-                    match msg {
-                        Message::Response { .. } => {
-                            let shared_secret_key = client.process_response(msg)?; 
-                            println!("Shared secret key is {}", shared_secret_key);
-                            client.set_shared_secret_key(shared_secret_key, None)?;
-
-                            if cfg!(target_os = "macos") {
-                                // Set the default gateway to Tun device's remote address
-                                assert!(process::Command::new("route").arg("delete").arg("default").status().unwrap().success()); 
-                                assert!(process::Command::new("route").arg("add").arg("default").arg("10.20.20.1").status().unwrap().success()); 
-                            } else if cfg!(target_os = "linux") {
-                                let default_gw_output = process::Command::new("ip").arg("route").arg("show").arg("default").output().unwrap(); 
-                                assert!(default_gw_output.status.success()); 
-                                let mut words = str::from_utf8(&default_gw_output.stdout).unwrap().split_whitespace();
-                                let mut interface = None;
-                                let mut gateway = None;
-
-                                while let Some(word) = words.next() {
-                                    match word {
-                                        "dev" => interface = words.next(),
-                                        "via" => gateway = words.next(),
-                                        _ => {}
-                                    }
+                    match client.read_socket() {
+                        Ok((addr, msg)) => {
+                            match msg {
+                                Message::Response { .. } => {
+                                    let shared_secret_key = client.process_response(msg)?; 
+                                    println!("Shared secret key is {}", shared_secret_key);
+                                    client.set_shared_secret_key(shared_secret_key, None)?;
+                                    client.setup_default_gateway(); 
+                                }, 
+                                Message::PayLoad { client_id, data } => {
+                                    let shared_key = client.get_shared_secret_key(None)?; 
+                                    // TODO: Decrypt data here with shared key
+                                    println!("IP packet received: {:?}", data);
+                                    client.write_tun(data)?;
                                 }
-                                println!("Original default gateway : {:?}", gateway);
-                                assert!(process::Command::new("ip").arg("route").arg("del").arg("default").arg("via").arg(gateway.unwrap()).status().unwrap().success()); 
-                                assert!(process::Command::new("ip").arg("route").arg("add").arg("default").arg("via").arg("10.20.20.1").arg("dev").arg(interface.unwrap()).status().unwrap().success()); 
-                            } else {
-                                unimplemented!();
+                                _ => ()  // Implement data transmission
                             }
                         }, 
-                        Message::PayLoad { client_id, data } => {
-                            let shared_key = client.get_shared_secret_key(None)?; 
-                            // TODO: Decrypt data here with shared key
-                            println!("IP packet received: {:?}", data);
-                            client.write_tun(data)?;
-                        }
-                        _ => ()  // Implement data transmission
+                        Err(e) => eprintln!("The error: {}", e)
                     }
                 }, 
                 Token(1) => {
@@ -206,13 +192,16 @@ pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: 
                                         let serialized = serde_json::to_string::<Message>(&msg).map_err(|e| SerialError(e.to_string()))?;
                                         println!("IP packet sent: {:?}", &buffer[..len]); 
 
-                                        client.write_socket(serialized.as_bytes(), None)?;
+                                        match client.write_socket(serialized.as_bytes(), None) {
+                                            Err(e) => println!("Error: {:?}", e), 
+                                            _ => ()
+                                        };
                                     }, 
                                     None => {eprintln!("Connection not yet set between client and server")}
                                 }
                             }
                         }, 
-                        Err(_) => ()
+                        Err(e) => eprintln!("The error: {}", e)
                     };
                 }, 
                 _ => ()
