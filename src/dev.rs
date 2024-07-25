@@ -1,5 +1,5 @@
 use mio::net::UdpSocket;
-use crate::{crypto::{generate_public_key, generate_shared_key}, tun::TunDevice};
+use crate::{crypto::{generate_public_key, generate_shared_key}, error::LogicError, tun::TunDevice};
 use std::{collections::HashMap, net::SocketAddr, process, str};
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -29,7 +29,8 @@ pub enum Device {
         tun : TunDevice,
         shared_secret_key : Option<BigInt>, 
         private_key : BigInt, 
-        id: Option<u8>
+        id: Option<u8>, 
+        default_gateway: Option<String>
     }, 
     Server {
         server_socket : UdpSocket, 
@@ -226,10 +227,10 @@ impl Device {
         }
     }
 
-    pub fn setup_default_gateway(&self) {
+    pub fn setup_default_gateway(&mut self) {
         match self {
-            Device::Client { server_addr , ..} => {
-                if cfg!(target_os = "macos") {
+            Device::Client { server_addr , default_gateway, ..} => {
+                *default_gateway = if cfg!(target_os = "macos") {
                     let default_gw_output = process::Command::new("route").arg("-n").arg("get").arg("default").output().unwrap();
                     assert!(default_gw_output.status.success());
                     let stdout = String::from_utf8(default_gw_output.stdout).unwrap();
@@ -238,11 +239,11 @@ impl Device {
                         .find(|line| line.contains("gateway"))
                         .map(|line| line.split_whitespace().nth(1).unwrap_or(""))
                         .unwrap();
-        
                     // Set the default gateway to Tun device's remote address
                     assert!(process::Command::new("route").arg("add").arg(server_addr.ip().to_string()).arg(gateway).status().unwrap().success()); 
                     assert!(process::Command::new("route").arg("delete").arg("default").status().unwrap().success()); 
                     assert!(process::Command::new("route").arg("add").arg("default").arg("10.20.20.1").status().unwrap().success()); 
+                    Some(gateway.to_string())
                 } else if cfg!(target_os = "linux") {
                     let default_gw_output = process::Command::new("ip").arg("route").arg("show").arg("default").output().unwrap(); 
                     assert!(default_gw_output.status.success()); 
@@ -257,12 +258,24 @@ impl Device {
                             _ => {}
                         }
                     }
-                    println!("Original default gateway : {:?}", gateway);
                     assert!(process::Command::new("ip").arg("route").arg("add").arg(server_addr.ip().to_string()).arg("via").arg(gateway.unwrap()).status().unwrap().success()); 
                     assert!(process::Command::new("ip").arg("route").arg("del").arg("default").arg("via").arg(gateway.unwrap()).status().unwrap().success()); 
-                    assert!(process::Command::new("ip").arg("route").arg("add").arg("default").arg("via").arg("10.20.20.1").arg("dev").arg(interface.unwrap()).status().unwrap().success()); 
+                    assert!(process::Command::new("ip").arg("route").arg("add").arg("default").arg("via").arg("10.20.20.1").arg("dev").arg(interface.unwrap()).status().unwrap().success());
+                    Some(gateway.unwrap().to_string())
                 } else {
                     unimplemented!();
+                }
+            }, 
+            _ => ()
+        }
+    }
+
+    pub fn return_default_gateway(&self) {
+        match self {
+            Device::Client { default_gateway, ..} => {
+                if let Some(gw) = default_gateway {
+                    assert!(process::Command::new("route").arg("delete").arg("default").status().unwrap().success()); 
+                    assert!(process::Command::new("route").arg("add").arg("default").arg(gw).status().unwrap().success());
                 }
             }, 
             _ => ()

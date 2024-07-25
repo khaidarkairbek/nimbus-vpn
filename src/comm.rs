@@ -1,4 +1,6 @@
 use mio::{net::UdpSocket, unix::SourceFd};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::{net::SocketAddr, collections::HashMap, os::fd::AsRawFd, process, str};
 use num_bigint::BigInt;
 use mio::{Events, Poll as Mio_Poll, Interest, Token};
@@ -8,6 +10,7 @@ use anyhow::Result;
 use crate::error::{
     ClientError, CommError::*, ServerError, SocketError::*
 };
+use ctrlc; 
 
 pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_private_key : BigInt) -> Result<()> {   
     let mut server_socket = UdpSocket::bind(server_addr).map_err(|e| SocketBindError(e.to_string()))?;
@@ -107,7 +110,7 @@ pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_priva
     }
 }
 
-pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: Option<u8>, client_private_key: BigInt ) -> Result<()> {
+pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: Option<u8>, client_private_key: BigInt, running: Arc<AtomicBool> ) -> Result<()> {
     let mut client_socket = UdpSocket::bind(client_addr).map_err(|e| SocketBindError(e.to_string()))?;
 
     let tun = TunDevice::create(tun_num)?; 
@@ -119,9 +122,9 @@ pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: 
     poll.registry().register(&mut client_socket, Token(0), Interest::READABLE).map_err(|_| MioRegistryError)?;
     poll.registry().register(&mut tun_socket, Token(1), Interest::READABLE | Interest::WRITABLE).map_err(|_| MioRegistryError)?; 
 
-    let mut client = Device::Client { client_socket: client_socket, server_addr: server_addr, tun: tun, shared_secret_key: None, private_key: client_private_key, id: None}; 
+    let mut client = Device::Client { client_socket: client_socket, server_addr: server_addr, tun: tun, shared_secret_key: None, private_key: client_private_key, id: None, default_gateway: None}; 
 
-    client.initiate_handshake()?;
+    client.initiate_handshake()?; 
 
     // MacOS
     // Get default gateway: 
@@ -149,6 +152,10 @@ pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: 
     // TODO: Need a way to revert back to original default gateway in case of program exit, due to interruptions such as ctrl + c or crashes
 
     loop {
+        if !running.load(Ordering::SeqCst) {
+            client.return_default_gateway(); 
+            return Ok(()) 
+        }
         poll.poll(&mut events, None).map_err(|_| MioPollingError)?; // Replace with async tokio 
         for event in &events {
             match event.token() {
@@ -160,7 +167,7 @@ pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: 
                                     let shared_secret_key = client.process_response(msg)?; 
                                     println!("Shared secret key is {}", shared_secret_key);
                                     client.set_shared_secret_key(shared_secret_key, None)?;
-                                    client.setup_default_gateway(); 
+                                    client.setup_default_gateway();
                                 }, 
                                 Message::PayLoad { client_id, data } => {
                                     let shared_key = client.get_shared_secret_key(None)?; 
@@ -207,7 +214,7 @@ pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: 
                 _ => ()
             }
         }
-    }       
+    }
 }
 
 #[cfg(test)]
@@ -229,7 +236,7 @@ mod tests {
         let mut events = Events::with_capacity(1024);
         poll.registry().register(&mut client_socket, Token(0), Interest::READABLE).unwrap();
 
-        let client = Device::Client {client_socket: client_socket, server_addr: server_addr, tun : tun, shared_secret_key : None, private_key : client_private_key, id: None};
+        let client = Device::Client {client_socket: client_socket, server_addr: server_addr, tun : tun, shared_secret_key : None, private_key : client_private_key, id: None, default_gateway: None};
         client.initiate_handshake().unwrap();
 
         let mut shared_secret_key = None;

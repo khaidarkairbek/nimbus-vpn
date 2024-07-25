@@ -5,7 +5,7 @@ mod cli;
 mod crypto;
 mod error; 
 
-use std::{net::SocketAddr, process};
+use std::{net::SocketAddr, process, sync::{atomic::{AtomicBool, Ordering}, Arc}};
 use num_bigint::BigInt;
 use comm::{client_side, server_side};
 use clap::Parser;
@@ -15,6 +15,13 @@ use crate::cli::Mode;
 fn main () {
     let args = cli::Cli::parse();
 
+    let running: Arc<AtomicBool> = Arc::new(AtomicBool::new(true));
+    let r: Arc<AtomicBool> = running.clone();
+
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    }).expect("Error setting Ctrl-C handler");
+
     match args.mode {
         Mode::Client { address, port, key, local_port, tun_num } => {
             let server_addr: SocketAddr = format!("{}:{}", address, port).parse().unwrap(); 
@@ -23,7 +30,7 @@ fn main () {
                 Some(port) => format!("0.0.0.0:{}", port).parse().unwrap()
             }; 
             let client_private_key: BigInt = key.parse().unwrap(); 
-            client_side(client_addr, server_addr, tun_num, client_private_key).unwrap();
+            client_side(client_addr, server_addr, tun_num, client_private_key, running.clone()).unwrap();
         }, 
         Mode::Server { port, key, tun_num }=> {
             let server_addr: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap(); 
