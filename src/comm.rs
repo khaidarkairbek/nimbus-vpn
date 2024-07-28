@@ -236,7 +236,7 @@ mod tests {
         let mut events = Events::with_capacity(1024);
         poll.registry().register(&mut client_socket, Token(0), Interest::READABLE).unwrap();
 
-        let client = Device::Client {client_socket: client_socket, server_addr: server_addr, tun : tun, shared_secret_key : None, private_key : client_private_key, id: None, default_gateway: None};
+        let mut  client = Device::Client {client_socket: client_socket, server_addr: server_addr, tun : tun, shared_secret_key : None, private_key : client_private_key, id: None, default_gateway: None};
         client.initiate_handshake().unwrap();
 
         let mut shared_secret_key = None;

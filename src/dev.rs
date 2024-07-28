@@ -1,5 +1,5 @@
 use mio::net::UdpSocket;
-use crate::{crypto::{generate_public_key, generate_shared_key}, error::LogicError, tun::TunDevice};
+use crate::{crypto::{generate_public_key, generate_shared_key}, tun::TunDevice};
 use std::{collections::HashMap, net::SocketAddr, process, str};
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -179,12 +179,13 @@ impl Device {
     }
 
     // Processes the response from the server after initiating handshake and calculates shared secret key
-    pub fn process_response (&self, response_msg: Message) -> Result<BigInt> {
+    pub fn process_response (&mut self, response_msg: Message) -> Result<BigInt> {
         match self {
-            Device::Client {private_key, tun,..} => {
+            Device::Client {private_key, tun, id, ..} => {
                 match response_msg {
                     Message::Response { client_id, server_public_key,  } => {
                         tun.up(Some(client_id));
+                        *id = Some(client_id); 
                         let shared_secret_key = generate_shared_key(&server_public_key, private_key);
                         Ok(shared_secret_key)
                     }, 
