@@ -1,9 +1,10 @@
-use mio::{net::UdpSocket, unix::SourceFd};
+//use mio::{net::UdpSocket, unix::SourceFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::{net::SocketAddr, collections::HashMap, os::fd::AsRawFd, process, str};
 use num_bigint::BigInt;
-use mio::{Events, Poll as Mio_Poll, Interest, Token};
+use tokio::net::{UdpSocket, UnixSocket, Unix};
+//use mio::{Events, Poll as Mio_Poll, Interest, Token};
 use crate::dev::{Device, Message, SecretData};
 use crate::tun::TunDevice;
 use anyhow::Result;
@@ -12,8 +13,8 @@ use crate::error::{
 };
 use ctrlc; 
 
-pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_private_key : BigInt) -> Result<()> {   
-    let mut server_socket = UdpSocket::bind(server_addr).map_err(|e| SocketBindError(e.to_string()))?;
+pub async fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_private_key : BigInt) -> Result<()> {   
+    let mut server_socket = UdpSocket::bind(server_addr).await.map_err(|e| SocketBindError(e.to_string()))?;
 
     // Enable ipv4 forwarding command: 
     // Linux: sysctl -w net.ipv4.ip_forward=1
@@ -33,6 +34,7 @@ pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_priva
     // The server_client_id of the tun is not relevant for server
     tun.up(None);
     let tun_raw_fd = tun.file.as_raw_fd(); 
+    let mut tun_docket = UnixSocket::from(&tun_raw_fd)
     let mut tun_socket = SourceFd(&tun_raw_fd);
 
     let mut poll = Mio_Poll::new()?; 
