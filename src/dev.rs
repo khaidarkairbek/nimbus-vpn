@@ -1,10 +1,13 @@
 //use mio::net::UdpSocket;
+use tokio::net::UdpSocket;
 use crate::{crypto::{generate_public_key, generate_shared_key}, tun::TunDevice};
 use std::{collections::HashMap, net::SocketAddr, process, str};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use num_bigint::BigInt;
-use anyhow::{Result, bail};
+use anyhow::{Result, bail}; 
+use std::sync::Arc; 
+use tokio::sync::Mutex; 
 
 use crate::error::{
     ServerError::*, 
@@ -87,12 +90,12 @@ impl Device {
     }
 
 
-    pub fn write_tun (&mut self, data: Vec<u8>) -> Result<()> {
+    pub async fn write_tun (&mut self, data: Vec<u8>) -> Result<()> {
         match self {
             Device::Client { tun, ..} | Device::Server { tun, .. } => {
                 let mut bytes_left = data.len(); 
                 while bytes_left > 0 {
-                    let bytes_written = tun.write(&data)?; 
+                    let bytes_written = tun.write(&data).await?; 
                     bytes_left = bytes_left - bytes_written;
                 }
                 Ok(())
@@ -100,21 +103,21 @@ impl Device {
         }
     }
 
-    pub fn read_tun (&mut self, buffer: &mut [u8]) -> Result<usize> {
+    pub async fn read_tun (&mut self, buffer: &mut [u8]) -> Result<usize> {
         match self {
             Device::Client { tun, ..} | Device::Server { tun, .. } => {
-                let len = tun.read(buffer)?; 
+                let len = tun.read(buffer).await?; 
                 Ok(len)
             }
         }
     }
 
-    pub fn write_socket (&mut self, data: &[u8], client_id: Option<u8>) -> Result<()> {
+    pub async fn write_socket (&mut self, data: &[u8], client_id: Option<u8>) -> Result<()> {
         match self {
             Device::Client { client_socket: socket , server_addr, ..} => {
                 let mut bytes_left = data.len(); 
                 while bytes_left > 0 {
-                    let bytes_written = socket.send_to(data, *server_addr).map_err(|e| SocketSendToError(e.to_string()))?; 
+                    let bytes_written = socket.send_to(data, *server_addr).await.map_err(|e| SocketSendToError(e.to_string()))?; 
                     bytes_left = bytes_left - bytes_written;
                 }
                 Ok(())
@@ -126,7 +129,7 @@ impl Device {
                         Some((client_addr, _)) => {
                             let mut bytes_left = data.len(); 
                             while bytes_left > 0 {
-                                let bytes_written = socket.send_to(data, *client_addr).map_err(|e| SocketSendToError(e.to_string()))?; 
+                                let bytes_written = socket.send_to(data, *client_addr).await.map_err(|e| SocketSendToError(e.to_string()))?; 
                                 bytes_left = bytes_left - bytes_written;
                             };
                             Ok(())
@@ -142,11 +145,11 @@ impl Device {
         }
     }
 
-    pub fn read_socket (&mut self) -> Result<(SocketAddr, Message)> {
+    pub async fn read_socket (&mut self) -> Result<(SocketAddr, Message)> {
         match self {
             Device::Client { client_socket: socket , ..} | Device::Server { server_socket : socket, .. } => {
                 let mut buffer = [0; 2000];
-                let (len, from_addr) = socket.recv_from(&mut buffer).map_err(|e| SocketReadError(e.to_string()))?;
+                let (len, from_addr) = socket.recv_from(&mut buffer).await.map_err(|e| SocketReadError(e.to_string()))?;
                 let msg = serde_json::from_slice::<Message>(&buffer[..len]).map_err(|e| DeserialError(e.to_string()))?;
                 Ok((from_addr, msg))
             },
@@ -154,7 +157,7 @@ impl Device {
     }
 
     // Initiates the handshake by calculating the client public key using Diffie Hellman algorithm and send the request with the public key to the server
-    pub fn initiate_handshake (&self) -> Result<()> {
+    pub async fn initiate_handshake (&self) -> Result<()> {
         match self {
             Device::Client {
                 client_socket,
@@ -168,7 +171,7 @@ impl Device {
 
                 let serialized = serde_json::to_string::<Message>(&request_msg).map_err(|e| SerialError(e.to_string()))?; //serialize the message to json
 
-                client_socket.send_to(serialized.as_bytes(), *server_addr).map_err(|e| SocketSendToError(e.to_string()))?;
+                client_socket.send_to(serialized.as_bytes(), *server_addr).await.map_err(|e| SocketSendToError(e.to_string()))?;
 
                 println!("request sent to the server {}", server_addr);
 
@@ -197,7 +200,7 @@ impl Device {
     }
 
     // Processes the request from the client after initiating handshake, sends the response and calculates shared secret key
-    pub fn process_request (&mut self, client_addr: &SocketAddr, request_msg: Message) -> Result<(u8, BigInt)> {
+    pub async fn process_request (&mut self, client_addr: &SocketAddr, request_msg: Message) -> Result<(u8, BigInt)> {
         match self {
             Device::Server {server_socket, private_key, available_ids,..} => {
                 match request_msg {
@@ -208,7 +211,7 @@ impl Device {
                                 let response_msg = Message::Response { client_id, server_public_key };
                                 let serialized = serde_json::to_string::<Message>(&response_msg).map_err(|e| SerialError(e.to_string()))?;
                                 
-                                server_socket.send_to(serialized.as_bytes(), client_addr.clone()).map_err(|e| SocketSendToError(e.to_string()))?;
+                                server_socket.send_to(serialized.as_bytes(), client_addr.clone()).await.map_err(|e| SocketSendToError(e.to_string()))?;
                                 
                                 println!("Response sent to the client {}", client_addr);
                                 
