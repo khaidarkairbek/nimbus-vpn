@@ -1,14 +1,15 @@
-# Nimbus VPN
+## Introduction
 
-Nimbus VPN is a command-line application for client- and server-side VPN communication using Rust. It handles TUN devices, socket communication, and secure key exchange using the Diffie-Hellman algorithm.
+Nimbus VPN provides a robust and secure way to establish VPN connections. It supports dynamic IP routing and is compatible with both macOS and Linux. The project employs the Diffie-Hellman key exchange algorithm for secure key generation and uses the ChaCha20-Poly1305 algorithm for authenticated encryption, ensuring that data remains confidential and tamper-proof.
 
 ## Features
 
-- Secure key exchange using Diffie-Hellman algorithm
-- Support for TUN device creation and management
-- Cross-platform compatibility (macOS and Linux)
-- Graceful shutdown handling
-- Command-line interface for easy configuration
+- **Secure Key Exchange**: Uses the Diffie-Hellman algorithm to securely establish shared secret keys between the client and server.
+- **Authenticated Encryption**: Implements the ChaCha20-Poly1305 algorithm to encrypt and authenticate data, ensuring both confidentiality and integrity.
+- **TUN Device Management**: Handles the creation, configuration, and operation of TUN devices for secure network tunneling.
+- **Cross-Platform Support**: Compatible with macOS and Linux, with platform-specific optimizations.
+- **Graceful Shutdown**: Handles system signals for clean and safe shutdown of both client and server applications.
+- **User-Friendly CLI**: Provides an intuitive command-line interface for easy configuration and management.
   
 ## Architecture
 
