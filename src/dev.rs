@@ -5,9 +5,7 @@ use std::{collections::HashMap, net::SocketAddr, process, str};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use num_bigint::BigInt;
-use anyhow::{Result, bail}; 
-use std::sync::Arc; 
-use tokio::sync::Mutex; 
+use anyhow::{Result, bail};
 
 use crate::error::{
     ServerError::*, 
@@ -95,7 +93,7 @@ impl Device {
             Device::Client { tun, ..} | Device::Server { tun, .. } => {
                 let mut bytes_left = data.len(); 
                 while bytes_left > 0 {
-                    let bytes_written = tun.write(&data).await?; 
+                    let bytes_written = tun.write(&data)?; 
                     bytes_left = bytes_left - bytes_written;
                 }
                 Ok(())
@@ -106,7 +104,7 @@ impl Device {
     pub async fn read_tun (&mut self, buffer: &mut [u8]) -> Result<usize> {
         match self {
             Device::Client { tun, ..} | Device::Server { tun, .. } => {
-                let len = tun.read(buffer).await?; 
+                let len = tun.read(buffer)?; 
                 Ok(len)
             }
         }

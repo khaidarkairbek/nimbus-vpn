@@ -1,8 +1,8 @@
-use std::{io::Error, mem, os::fd::{AsRawFd, FromRawFd}, path::Path, process};
+use std::{fs::{self, File}, io::{Error, Read, Write}, mem, os::fd::{AsRawFd, FromRawFd}, path::Path, process};
 use libc::{self, __c_anonymous_ifr_ifru};
 use anyhow::{Result, bail, anyhow};
-use tokio::fs::File;
-use tokio::io::{self, AsyncReadExt, AsyncWriteExt}; 
+//use tokio::fs::File;
+//use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 
 use crate::error::{
     TunInitError::*, 
@@ -109,7 +109,7 @@ impl TunDevice {
 
                 println!("Tun connected ");
                 Ok(TunDevice {
-                    file : File::from_std(file), 
+                    file : file, 
                     id : tun_num
                 })
             }
@@ -212,15 +212,15 @@ impl TunDevice {
 
     #[cfg(target_os = "macos")]
     // Write the data into tun device from the buffer, returns the length of the written data or Error
-    pub async fn write(&mut self, buffer : &[u8]) -> Result<usize>{
+    pub fn write(&mut self, buffer : &[u8]) -> Result<usize>{
         let mut packet = match buffer[0] & 0xf {
             6 => vec![0, 0, 0, 10],   // 4 byte header for ipv6 packet on MacOS
             _ => vec![0, 0, 0, 2]     // 4 byte header for ipv4 packet on MacOS
         }; 
         
-        packet.write_all(buffer).await?;
+        packet.write_all(buffer)?;
 
-        match self.file.write(&packet).await {
+        match self.file.write(&packet) {
             Ok(len) => if len > 4 { Ok(len - 4) } else { Ok(0) }, 
             Err(e) => bail!(TunWriteError(e))
         }
@@ -228,17 +228,17 @@ impl TunDevice {
 
     #[cfg(target_os = "linux")]
     // Write the data into tun device from the buffer, returns the length of the written data or Error
-    pub async fn write(&mut self, buffer : &[u8]) -> Result<usize>{
-        self.file.write(buffer).await.map_err(|e| anyhow!(TunWriteError(e)))
+    pub fn write(&mut self, buffer : &[u8]) -> Result<usize>{
+        self.file.write(buffer).map_err(|e| anyhow!(TunWriteError(e)))
     }
 
     #[cfg(target_os = "macos")]
     // Read the data from tun device into the buffer, returns the length of the read data or Error
-    pub async fn read(&mut self, buffer : &mut [u8]) -> Result<usize> {
+    pub fn read(&mut self, buffer : &mut [u8]) -> Result<usize> {
 
         let mut packet = [0; 2000];  // the regular MTU is about 1500, so 2000 should be sufficient
 
-        match self.file.read(&mut packet).await {
+        match self.file.read(&mut packet) {
             Ok(len) => {
                 if len <= 4 {
                     // Not enough data read to constitute a valid packet
@@ -255,8 +255,8 @@ impl TunDevice {
 
     #[cfg(target_os = "linux")]
     // Read the data from tun device into the buffer, returns the length of the read data or Error
-    pub async fn read(&mut self, buffer : &mut [u8]) -> Result<usize> {
-        self.file.read(buffer).await.map_err(|e| anyhow!(TunReadError(e)))
+    pub fn read(&mut self, buffer : &mut [u8]) -> Result<usize> {
+        self.file.read(buffer).map_err(|e| anyhow!(TunReadError(e)))
     }
 }
 
