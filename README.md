@@ -1,6 +1,4 @@
-## Introduction
-
-Nimbus VPN provides a robust and secure way to establish VPN connections. It supports dynamic IP routing and is compatible with both macOS and Linux. The project employs the Diffie-Hellman key exchange algorithm for secure key generation and uses the ChaCha20-Poly1305 algorithm for authenticated encryption, ensuring that data remains confidential and tamper-proof.
+Nimbus VPN provides a robust and secure way to establish VPN connections. It is compatible with both macOS and Linux. The project employs the Diffie-Hellman key exchange algorithm for secure key generation and uses the ChaCha20-Poly1305 algorithm for authenticated encryption, ensuring that data remains confidential and tamper-proof.
 
 ## Features
 
@@ -98,7 +96,7 @@ Nimbus VPN provides a robust and secure way to establish VPN connections. It sup
 Clone the repository:
 
 ```sh
-git clone https://github.com/yourusername/nimbus-vpn.git
+git clone https://github.com/Khadka-Bishal/nimbus-vpn.git
 cd nimbus-vpn
 ```
 
