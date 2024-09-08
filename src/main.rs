@@ -19,7 +19,7 @@ fn main () {
     let r: Arc<AtomicBool> = running.clone();
 
     ctrlc::set_handler(move || {
-        r.store(false, Ordering::SeqCst);
+        r.store(false, Ordering::Relaxed);
     }).expect("Error setting Ctrl-C handler");
 
     match args.mode {
