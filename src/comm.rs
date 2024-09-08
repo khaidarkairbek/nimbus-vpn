@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::{net::SocketAddr, collections::HashMap, os::fd::AsRawFd, process, str};
 use num_bigint::BigInt;
 use mio::{Events, Poll as Mio_Poll, Interest, Token};
+use crate::crypto::{decrypt_data, encrypt_data};
 use crate::dev::{Device, Message, SecretData};
 use crate::tun::TunDevice;
 use anyhow::Result;
@@ -64,15 +65,11 @@ pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_priva
                                     server.set_shared_secret_key(shared_secret_key, Some((client_id, client_addr)))?; 
                                 }, 
                                 Message::PayLoad { client_id, data } => {
-                                    let client_info = server.get_shared_secret_key(Some(client_id)); 
-                                    match client_info {
-                                        Ok(SecretData::SharedSecretClientData(address, shared_key)) => {
-                                            // TODO: Decrypt data here with shared key
-                                            println!("IP packet received: {:?}", data);
-                                            server.write_tun(data)?;
-                                        }, 
-                                        Err(e) => eprintln!("The error: {}", e),
-                                        _ => ()
+                                    let shared_secret = server.get_shared_secret_key(Some(client_id)).map_err(|e| println!("Error: {:?}", e)); 
+                                    if let Ok(SecretData::SharedSecretClientData(addr, key)) = shared_secret {
+                                        let decrypted_data = decrypt_data(&data, key)?; 
+                                        println!("IP packet received: {:?}", decrypted_data);
+                                        server.write_tun(decrypted_data)?;
                                     }
                                 }
                                 _ => ()  
@@ -88,17 +85,20 @@ pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_priva
                             let data = &buffer[..len]; 
                             if len > 0  {
                                 // the destination ip address is 16th to 20th bytes in ip packet => internal client ip address of the tun device
-                                let client_internal_tun_address = &data[15..19]; 
+                                let client_internal_tun_address = &data[16..=19]; 
                                 // the client tun device configuration ifconfig utun* address1 address2, where address1 is internal destination ip address of the form 10.20.20.client_id
                                 let client_id = client_internal_tun_address[3]; 
-                                // TODO: Encrypt data here with shared key
-                                let msg = Message::PayLoad { client_id: client_id, data: data.to_vec() }; 
-                                let serialized = serde_json::to_string::<Message>(&msg).map_err(|e| SerialError(e.to_string()))?;
-                                println!("IP packet sent: {:?}", &buffer[..len]);
-                                match server.write_socket(serialized.as_bytes(), Some(client_id)) {
-                                    Err(e) => println!("Error: {:?}", e), 
-                                    _ => ()
-                                };
+                                let shared_secret = server.get_shared_secret_key(Some(client_id)).map_err(|e| println!("Error: {:?}", e)); 
+                                if let Ok(SecretData::SharedSecretClientData(addr, key)) = shared_secret {
+                                    let encrypted_data = encrypt_data(data, key)?;
+                                    let msg = Message::PayLoad { client_id: client_id, data: encrypted_data }; 
+                                    let serialized = serde_json::to_string::<Message>(&msg).map_err(|e| SerialError(e.to_string()))?;
+                                    println!("IP packet sent: {:?}", data);
+                                    match server.write_socket(serialized.as_bytes(), Some(client_id)) {
+                                        Err(e) => println!("Error: {:?}", e), 
+                                        _ => ()
+                                    };
+                                }
                             }
                         }, 
                         Err(e) => eprintln!("The error: {}", e)
@@ -126,33 +126,8 @@ pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: 
 
     client.initiate_handshake()?; 
 
-    // MacOS
-    // Get default gateway: 
-    // route -n get default
-    // Result: 
-    //   route to: default
-    //    destination: default
-    //    mask: default
-    //    gateway: __.__.__.__
-    //    interface: en0
-    //    flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
-    //    recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire
-    //    0         0         0         0         0         0      1500         0 
-
-    // Grab default: grep gateway
-    //   gateway: __.__.__.__
-
-    // Grab address only: awk '{print $2}' 
-    // __.__.__.__
-
-    // To change default gateway we need to first delete and then add our new default gateway: 
-    // sudo route delete default
-    // sudo route add default 10.20.20.1 
-
-    // TODO: Need a way to revert back to original default gateway in case of program exit, due to interruptions such as ctrl + c or crashes
-
     loop {
-        if !running.load(Ordering::SeqCst) {
+        if !running.load(Ordering::Relaxed) {
             client.return_default_gateway(); 
             return Ok(()) 
         }
@@ -170,10 +145,12 @@ pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: 
                                     client.setup_default_gateway();
                                 }, 
                                 Message::PayLoad { client_id, data } => {
-                                    let shared_key = client.get_shared_secret_key(None)?; 
-                                    // TODO: Decrypt data here with shared key
-                                    println!("IP packet received: {:?}", data);
-                                    client.write_tun(data)?;
+                                    let shared_secret = client.get_shared_secret_key(None).map_err(|e| println!("Error: {:?}", e));
+                                    if let Ok(SecretData::SharedSecretKey(key)) = shared_secret {
+                                        let decrypted_data = decrypt_data(&data, key)?;
+                                        println!("IP packet received: {:?}", decrypted_data);
+                                        client.write_tun(decrypted_data)?;
+                                    }
                                 }
                                 _ => ()  // Implement data transmission
                             }
@@ -193,16 +170,17 @@ pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: 
                                 };
                                 match client_id {
                                     Some(id) => {
-                                        let shared_key = client.get_shared_secret_key(None); 
-                                        // TODO: Encrypt data here with shared key
-                                        let msg = Message::PayLoad { client_id: id, data: data.to_vec() }; 
-                                        let serialized = serde_json::to_string::<Message>(&msg).map_err(|e| SerialError(e.to_string()))?;
-                                        println!("IP packet sent: {:?}", &buffer[..len]); 
-
-                                        match client.write_socket(serialized.as_bytes(), None) {
-                                            Err(e) => println!("Error: {:?}", e), 
-                                            _ => ()
-                                        };
+                                        let shared_secret = client.get_shared_secret_key(None).map_err(|e| println!("Error: {:?}", e)); 
+                                        if let Ok(SecretData::SharedSecretKey(key)) = shared_secret {
+                                            let encrypted_data = encrypt_data(data, key)?; 
+                                            let msg =  Message::PayLoad { client_id: id, data: encrypted_data }; 
+                                            let serialized = serde_json::to_string::<Message>(&msg).map_err(|e| SerialError(e.to_string()))?;
+                                            println!("IP packet sent: {:?}", data);
+                                            match client.write_socket(serialized.as_bytes(), None) {
+                                                Err(e) => println!("Error: {:?}", e), 
+                                                _ => ()
+                                            };
+                                        }
                                     }, 
                                     None => {eprintln!("Connection not yet set between client and server")}
                                 }

@@ -90,10 +90,9 @@ impl Device {
     pub fn write_tun (&mut self, data: Vec<u8>) -> Result<()> {
         match self {
             Device::Client { tun, ..} | Device::Server { tun, .. } => {
-                let mut bytes_left = data.len(); 
-                while bytes_left > 0 {
-                    let bytes_written = tun.write(&data)?; 
-                    bytes_left = bytes_left - bytes_written;
+                let mut bytes_written = 0; 
+                while bytes_written < data.len() {
+                    bytes_written += tun.write(&data[bytes_written .. data.len()])?; 
                 }
                 Ok(())
             }
@@ -112,10 +111,9 @@ impl Device {
     pub fn write_socket (&mut self, data: &[u8], client_id: Option<u8>) -> Result<()> {
         match self {
             Device::Client { client_socket: socket , server_addr, ..} => {
-                let mut bytes_left = data.len(); 
-                while bytes_left > 0 {
-                    let bytes_written = socket.send_to(data, *server_addr).map_err(|e| SocketSendToError(e.to_string()))?; 
-                    bytes_left = bytes_left - bytes_written;
+                let mut bytes_written = 0; 
+                while bytes_written < data.len() {
+                    bytes_written += socket.send_to(&data[bytes_written .. data.len()], *server_addr).map_err(|e| SocketSendToError(e.to_string()))?; 
                 }
                 Ok(())
             }, 
@@ -124,10 +122,9 @@ impl Device {
                 if let Some(id) = client_id {
                     match client_key_map.get(&id) {
                         Some((client_addr, _)) => {
-                            let mut bytes_left = data.len(); 
-                            while bytes_left > 0 {
-                                let bytes_written = socket.send_to(data, *client_addr).map_err(|e| SocketSendToError(e.to_string()))?; 
-                                bytes_left = bytes_left - bytes_written;
+                            let mut bytes_written = 0; 
+                            while bytes_written < data.len() {
+                                bytes_written += socket.send_to(&data[bytes_written .. data.len()], *client_addr).map_err(|e| SocketSendToError(e.to_string()))?; 
                             };
                             Ok(())
                         }, 
