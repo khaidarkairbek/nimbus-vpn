@@ -1,3 +1,5 @@
+## In Progress
+
 Nimbus VPN provides a robust and secure way to establish VPN connections. It is compatible with both macOS and Linux. The project employs the Diffie-Hellman key exchange algorithm for secure key generation and uses the ChaCha20-Poly1305 algorithm for authenticated encryption, ensuring that data remains confidential and tamper-proof.
 
 ## Features
@@ -87,7 +89,7 @@ Nimbus VPN provides a robust and secure way to establish VPN connections. It is 
 
 ### Prerequisites
 
-- Rust (latest stable version)
+- Rust
 
 ### Installation
 
