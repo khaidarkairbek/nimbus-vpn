@@ -1,13 +1,13 @@
-use chacha20poly1305::aead::{Aead, KeyInit, OsRng};
+use anyhow::Result;
 use chacha20poly1305::aead::generic_array::GenericArray;
+use chacha20poly1305::aead::{Aead, KeyInit, OsRng};
 use chacha20poly1305::{AeadCore, ChaCha20Poly1305};
 use num_bigint::BigInt;
-use anyhow::Result; 
 
-use crate::error::CryptoError::*; 
+use crate::error::CryptoError::*;
 
 // Diffie Hellman Key Exchange implementation
-const DH_MODULUS: &'static str = "23";  // Placeholder values for testing
+const DH_MODULUS: &'static str = "23"; // Placeholder values for testing
 const DH_BASE: &'static str = "5";
 
 pub fn generate_public_key(private_key: &BigInt) -> BigInt {
@@ -35,7 +35,9 @@ pub fn encrypt_data(data: &[u8], key: &BigInt) -> Result<Vec<u8>> {
     let key_bytes_pad = pad_key_to_32_bytes(&key_in_bytes); //pad key to 32 bytes
     let cipher = ChaCha20Poly1305::new(GenericArray::from_slice(&key_bytes_pad)); //create chacha20-poly1305 instance with the padded key
     let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng); //generate random nonce
-    let cipher_text = cipher.encrypt(&nonce, data).map_err(|e| EncryptError(e.to_string()))?; //encrypt the data with generated nonce
+    let cipher_text = cipher
+        .encrypt(&nonce, data)
+        .map_err(|e| EncryptError(e.to_string()))?; //encrypt the data with generated nonce
     let mut result = nonce.to_vec(); //combine the nonce and ciphertext into a single vector
     result.extend(cipher_text);
     Ok(result)
@@ -47,38 +49,52 @@ pub fn decrypt_data(cipher_text: &[u8], key: &BigInt) -> Result<Vec<u8>> {
     let cipher = ChaCha20Poly1305::new(GenericArray::from_slice(&key_bytes_pad)); //create chacha20-poly1305 instance with the padded key
     let (nonce, cipher_text) = cipher_text.split_at(12); //split the cipher text into nonce and actual ciphertext
     let nonce = GenericArray::from_slice(nonce);
-    let plain_text = cipher.decrypt(nonce, cipher_text).map_err(|e| DecryptError(e.to_string()))?; //decrypt the ciphertext with the nonce
+    let plain_text = cipher
+        .decrypt(nonce, cipher_text)
+        .map_err(|e| DecryptError(e.to_string()))?; //decrypt the ciphertext with the nonce
     Ok(plain_text)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::Rng;
     use num_bigint::BigInt;
+    use rand::Rng;
 
     #[test]
     fn test_pad_key_to_32_bytes() {
         //test with a key shorter than 32 bytes
         let key = [1, 2, 3, 4, 5];
         let padded_key = pad_key_to_32_bytes(&key);
-        assert_eq!(padded_key, [
-            1, 2, 3, 4, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-        ]);
+        assert_eq!(
+            padded_key,
+            [
+                1, 2, 3, 4, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0
+            ]
+        );
 
         //test with a key exactly 32 bytes
-        let key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32];
+        let key = [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29, 30, 31, 32,
+        ];
         let padded_key = pad_key_to_32_bytes(&key);
         assert_eq!(padded_key, key);
 
         //test with a key longer than 32 bytes
         let key = [
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29, 30, 31, 32, 33, 34,
         ];
         let padded_key = pad_key_to_32_bytes(&key);
-        assert_eq!(padded_key, [
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32
-        ]);
+        assert_eq!(
+            padded_key,
+            [
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+                24, 25, 26, 27, 28, 29, 30, 31, 32
+            ]
+        );
     }
 
     #[test]

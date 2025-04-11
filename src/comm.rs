@@ -1,195 +1,265 @@
-use mio::{net::UdpSocket, unix::SourceFd};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::{net::SocketAddr, collections::HashMap, os::fd::AsRawFd, process, str};
-use num_bigint::BigInt;
-use mio::{Events, Poll as Mio_Poll, Interest, Token};
 use crate::crypto::{decrypt_data, encrypt_data};
 use crate::dev::{Device, Message, SecretData};
+use crate::error::{ClientError, CommError::*, ServerError, SocketError::*};
 use crate::tun::TunDevice;
 use anyhow::Result;
-use crate::error::{
-    ClientError, CommError::*, ServerError, SocketError::*
-};
-use ctrlc; 
+use ctrlc;
+use mio::{net::UdpSocket, unix::SourceFd};
+use mio::{Events, Interest, Poll as Mio_Poll, Token};
+use num_bigint::BigInt;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::{collections::HashMap, net::SocketAddr, os::fd::AsRawFd, process, str};
 
-pub fn server_side (server_addr : SocketAddr, tun_num : Option<u8>, server_private_key : BigInt) -> Result<()> {   
-    let mut server_socket = UdpSocket::bind(server_addr).map_err(|e| SocketBindError(e.to_string()))?;
+pub fn server_side(
+    server_addr: SocketAddr,
+    tun_num: Option<u8>,
+    server_private_key: BigInt,
+) -> Result<()> {
+    let mut server_socket =
+        UdpSocket::bind(server_addr).map_err(|e| SocketBindError(e.to_string()))?;
 
-    // Enable ipv4 forwarding command: 
+    // Enable ipv4 forwarding command:
     // Linux: sysctl -w net.ipv4.ip_forward=1
     // MacOS: sysctl -w net.inet.ip.forwarding=1
     if cfg!(target_os = "macos") {
-        let status = process::Command::new("sysctl").arg("-w").arg("net.inet.ip.forwarding=1").status().unwrap(); 
+        let status = process::Command::new("sysctl")
+            .arg("-w")
+            .arg("net.inet.ip.forwarding=1")
+            .status()
+            .unwrap();
         assert!(status.success());
     } else if cfg!(target_os = "linux") {
-        let status = process::Command::new("sysctl").arg("-w").arg("net.ipv4.ip_forward=1").status().unwrap(); 
+        let status = process::Command::new("sysctl")
+            .arg("-w")
+            .arg("net.ipv4.ip_forward=1")
+            .status()
+            .unwrap();
         assert!(status.success());
     } else {
         unimplemented!()
     }
 
-
-    let tun = TunDevice::create(tun_num)?; 
+    let tun = TunDevice::create(tun_num)?;
     // The server_client_id of the tun is not relevant for server
     tun.up(None);
-    let tun_raw_fd = tun.file.as_raw_fd(); 
+    let tun_raw_fd = tun.file.as_raw_fd();
     let mut tun_socket = SourceFd(&tun_raw_fd);
 
-    let mut poll = Mio_Poll::new()?; 
-    let mut events = Events::with_capacity(1024); 
-    poll.registry().register(&mut server_socket, Token(0), Interest::READABLE).map_err(|_| MioRegistryError)?;
-    poll.registry().register(&mut tun_socket, Token(1), Interest::READABLE | Interest::WRITABLE).map_err(|_| MioRegistryError)?;
+    let mut poll = Mio_Poll::new()?;
+    let mut events = Events::with_capacity(1024);
+    poll.registry()
+        .register(&mut server_socket, Token(0), Interest::READABLE)
+        .map_err(|_| MioRegistryError)?;
+    poll.registry()
+        .register(
+            &mut tun_socket,
+            Token(1),
+            Interest::READABLE | Interest::WRITABLE,
+        )
+        .map_err(|_| MioRegistryError)?;
 
-    let available_ids: Vec<u8> = (2..101).collect();  //allow 100 connections established between server and client
+    let available_ids: Vec<u8> = (2..101).collect(); //allow 100 connections established between server and client
 
-    let mut server = Device::Server { 
-        server_socket: server_socket, 
-        client_key_map: HashMap::new(), 
-        tun: tun, 
-        private_key: server_private_key, 
-        available_ids: available_ids
-    }; 
+    let mut server = Device::Server {
+        server_socket: server_socket,
+        client_key_map: HashMap::new(),
+        tun: tun,
+        private_key: server_private_key,
+        available_ids: available_ids,
+    };
 
     loop {
-        poll.poll(&mut events, None).map_err(|_| MioPollingError)?; // Replace with async tokio 
+        poll.poll(&mut events, None).map_err(|_| MioPollingError)?; // Replace with async tokio
         for event in &events {
             match event.token() {
-                Token(0) => { 
-                    match server.read_socket(){
-                        Ok((client_addr, msg)) => {
-                            match msg {
-                                Message::Request { .. } => {
-                                    let (client_id, shared_secret_key) = server.process_request(&client_addr, msg)?; 
-                                    println!("Shared secret key is {} with the client: {}", shared_secret_key, client_addr);
-                                    server.set_shared_secret_key(shared_secret_key, Some((client_id, client_addr)))?; 
-                                }, 
-                                Message::PayLoad { client_id, data } => {
-                                    let shared_secret = server.get_shared_secret_key(Some(client_id)).map_err(|e| println!("Error: {:?}", e)); 
-                                    if let Ok(SecretData::SharedSecretClientData(addr, key)) = shared_secret {
-                                        let decrypted_data = decrypt_data(&data, key)?; 
-                                        println!("IP packet received: {:?}", decrypted_data);
-                                        server.write_tun(decrypted_data)?;
-                                    }
-                                }
-                                _ => ()  
+                Token(0) => match server.read_socket() {
+                    Ok((client_addr, msg)) => match msg {
+                        Message::Request { .. } => {
+                            let (client_id, shared_secret_key) =
+                                server.process_request(&client_addr, msg)?;
+                            println!(
+                                "Shared secret key is {} with the client: {}",
+                                shared_secret_key, client_addr
+                            );
+                            server.set_shared_secret_key(
+                                shared_secret_key,
+                                Some((client_id, client_addr)),
+                            )?;
+                        }
+                        Message::PayLoad { client_id, data } => {
+                            let shared_secret = server
+                                .get_shared_secret_key(Some(client_id))
+                                .map_err(|e| println!("Error: {:?}", e));
+                            if let Ok(SecretData::SharedSecretClientData(addr, key)) = shared_secret
+                            {
+                                let decrypted_data = decrypt_data(&data, key)?;
+                                println!("IP packet received: {:?}", decrypted_data);
+                                server.write_tun(decrypted_data)?;
                             }
-                        }, 
-                        Err(e) => eprintln!("The error: {}", e)
-                    }
-                }, 
+                        }
+                        _ => (),
+                    },
+                    Err(e) => eprintln!("The error: {}", e),
+                },
                 Token(1) => {
                     let mut buffer = [0u8; 2000];
                     match server.read_tun(&mut buffer) {
-                        Ok(len ) => {
-                            let data = &buffer[..len]; 
-                            if len > 0  {
+                        Ok(len) => {
+                            let data = &buffer[..len];
+                            if len > 0 {
                                 // the destination ip address is 16th to 20th bytes in ip packet => internal client ip address of the tun device
-                                let client_internal_tun_address = &data[16..=19]; 
+                                let client_internal_tun_address = &data[16..=19];
                                 // the client tun device configuration ifconfig utun* address1 address2, where address1 is internal destination ip address of the form 10.20.20.client_id
-                                let client_id = client_internal_tun_address[3]; 
-                                let shared_secret = server.get_shared_secret_key(Some(client_id)).map_err(|e| println!("Error: {:?}", e)); 
-                                if let Ok(SecretData::SharedSecretClientData(addr, key)) = shared_secret {
+                                let client_id = client_internal_tun_address[3];
+                                let shared_secret = server
+                                    .get_shared_secret_key(Some(client_id))
+                                    .map_err(|e| println!("Error: {:?}", e));
+                                if let Ok(SecretData::SharedSecretClientData(addr, key)) =
+                                    shared_secret
+                                {
                                     let encrypted_data = encrypt_data(data, key)?;
-                                    let msg = Message::PayLoad { client_id: client_id, data: encrypted_data }; 
-                                    let serialized = serde_json::to_string::<Message>(&msg).map_err(|e| SerialError(e.to_string()))?;
+                                    let msg = Message::PayLoad {
+                                        client_id: client_id,
+                                        data: encrypted_data,
+                                    };
+                                    let serialized = serde_json::to_string::<Message>(&msg)
+                                        .map_err(|e| SerialError(e.to_string()))?;
                                     println!("IP packet sent: {:?}", data);
-                                    match server.write_socket(serialized.as_bytes(), Some(client_id)) {
-                                        Err(e) => println!("Error: {:?}", e), 
-                                        _ => ()
+                                    match server
+                                        .write_socket(serialized.as_bytes(), Some(client_id))
+                                    {
+                                        Err(e) => println!("Error: {:?}", e),
+                                        _ => (),
                                     };
                                 }
                             }
-                        }, 
-                        Err(e) => eprintln!("The error: {}", e)
+                        }
+                        Err(e) => eprintln!("The error: {}", e),
                     };
-                }, 
-                _ => ()
+                }
+                _ => (),
             }
         }
     }
 }
 
-pub fn client_side (client_addr : SocketAddr, server_addr: SocketAddr, tun_num: Option<u8>, client_private_key: BigInt, running: Arc<AtomicBool> ) -> Result<()> {
-    let mut client_socket = UdpSocket::bind(client_addr).map_err(|e| SocketBindError(e.to_string()))?;
+pub fn client_side(
+    client_addr: SocketAddr,
+    server_addr: SocketAddr,
+    tun_num: Option<u8>,
+    client_private_key: BigInt,
+    running: Arc<AtomicBool>,
+) -> Result<()> {
+    let mut client_socket =
+        UdpSocket::bind(client_addr).map_err(|e| SocketBindError(e.to_string()))?;
 
-    let tun = TunDevice::create(tun_num)?; 
-    let tun_raw_fd = tun.file.as_raw_fd(); 
+    let tun = TunDevice::create(tun_num)?;
+    let tun_raw_fd = tun.file.as_raw_fd();
     let mut tun_socket = SourceFd(&tun_raw_fd);
 
-    let mut poll = Mio_Poll::new().map_err(|_| MioInitError)?; 
-    let mut events = Events::with_capacity(1024); 
-    poll.registry().register(&mut client_socket, Token(0), Interest::READABLE).map_err(|_| MioRegistryError)?;
-    poll.registry().register(&mut tun_socket, Token(1), Interest::READABLE | Interest::WRITABLE).map_err(|_| MioRegistryError)?; 
+    let mut poll = Mio_Poll::new().map_err(|_| MioInitError)?;
+    let mut events = Events::with_capacity(1024);
+    poll.registry()
+        .register(&mut client_socket, Token(0), Interest::READABLE)
+        .map_err(|_| MioRegistryError)?;
+    poll.registry()
+        .register(
+            &mut tun_socket,
+            Token(1),
+            Interest::READABLE | Interest::WRITABLE,
+        )
+        .map_err(|_| MioRegistryError)?;
 
-    let mut client = Device::Client { client_socket: client_socket, server_addr: server_addr, tun: tun, shared_secret_key: None, private_key: client_private_key, id: None, default_gateway: None}; 
+    let mut client = Device::Client {
+        client_socket: client_socket,
+        server_addr: server_addr,
+        tun: tun,
+        shared_secret_key: None,
+        private_key: client_private_key,
+        id: None,
+        default_gateway: None,
+    };
 
-    client.initiate_handshake()?; 
+    client.initiate_handshake()?;
 
     loop {
         if !running.load(Ordering::Relaxed) {
-            client.return_default_gateway(); 
-            return Ok(()) 
+            client.return_default_gateway();
+            return Ok(());
         }
-        poll.poll(&mut events, None).map_err(|_| MioPollingError)?; // Replace with async tokio 
+        poll.poll(&mut events, None).map_err(|_| MioPollingError)?; // Replace with async tokio
         for event in &events {
             match event.token() {
-                Token(0) => { 
+                Token(0) => {
                     match client.read_socket() {
                         Ok((addr, msg)) => {
                             match msg {
                                 Message::Response { .. } => {
-                                    let shared_secret_key = client.process_response(msg)?; 
+                                    let shared_secret_key = client.process_response(msg)?;
                                     println!("Shared secret key is {}", shared_secret_key);
                                     client.set_shared_secret_key(shared_secret_key, None)?;
                                     client.setup_default_gateway();
-                                }, 
+                                }
                                 Message::PayLoad { client_id, data } => {
-                                    let shared_secret = client.get_shared_secret_key(None).map_err(|e| println!("Error: {:?}", e));
+                                    let shared_secret = client
+                                        .get_shared_secret_key(None)
+                                        .map_err(|e| println!("Error: {:?}", e));
                                     if let Ok(SecretData::SharedSecretKey(key)) = shared_secret {
                                         let decrypted_data = decrypt_data(&data, key)?;
                                         println!("IP packet received: {:?}", decrypted_data);
                                         client.write_tun(decrypted_data)?;
                                     }
                                 }
-                                _ => ()  // Implement data transmission
+                                _ => (), // Implement data transmission
                             }
-                        }, 
-                        Err(e) => eprintln!("The error: {}", e)
+                        }
+                        Err(e) => eprintln!("The error: {}", e),
                     }
-                }, 
+                }
                 Token(1) => {
                     let mut buffer = [0u8; 2000];
                     match client.read_tun(&mut buffer) {
-                        Ok(len ) => {
-                            let data = &buffer[..len]; 
-                            if len > 0  {
+                        Ok(len) => {
+                            let data = &buffer[..len];
+                            if len > 0 {
                                 let client_id = match client {
-                                    Device::Client { id, .. } => id, 
-                                    _ => None
+                                    Device::Client { id, .. } => id,
+                                    _ => None,
                                 };
                                 match client_id {
                                     Some(id) => {
-                                        let shared_secret = client.get_shared_secret_key(None).map_err(|e| println!("Error: {:?}", e)); 
-                                        if let Ok(SecretData::SharedSecretKey(key)) = shared_secret {
-                                            let encrypted_data = encrypt_data(data, key)?; 
-                                            let msg =  Message::PayLoad { client_id: id, data: encrypted_data }; 
-                                            let serialized = serde_json::to_string::<Message>(&msg).map_err(|e| SerialError(e.to_string()))?;
+                                        let shared_secret = client
+                                            .get_shared_secret_key(None)
+                                            .map_err(|e| println!("Error: {:?}", e));
+                                        if let Ok(SecretData::SharedSecretKey(key)) = shared_secret
+                                        {
+                                            let encrypted_data = encrypt_data(data, key)?;
+                                            let msg = Message::PayLoad {
+                                                client_id: id,
+                                                data: encrypted_data,
+                                            };
+                                            let serialized = serde_json::to_string::<Message>(&msg)
+                                                .map_err(|e| SerialError(e.to_string()))?;
                                             println!("IP packet sent: {:?}", data);
                                             match client.write_socket(serialized.as_bytes(), None) {
-                                                Err(e) => println!("Error: {:?}", e), 
-                                                _ => ()
+                                                Err(e) => println!("Error: {:?}", e),
+                                                _ => (),
                                             };
                                         }
-                                    }, 
-                                    None => {eprintln!("Connection not yet set between client and server")}
+                                    }
+                                    None => {
+                                        eprintln!(
+                                            "Connection not yet set between client and server"
+                                        )
+                                    }
                                 }
                             }
-                        }, 
-                        Err(e) => eprintln!("The error: {}", e)
+                        }
+                        Err(e) => eprintln!("The error: {}", e),
                     };
-                }, 
-                _ => ()
+                }
+                _ => (),
             }
         }
     }
@@ -207,37 +277,49 @@ mod tests {
         let client_private_key: BigInt = "24".parse().unwrap();
 
         let mut client_socket = UdpSocket::bind(client_addr).unwrap();
-        let tun = TunDevice::create(None).unwrap(); 
-        tun.up(Some(8)); 
+        let tun = TunDevice::create(None).unwrap();
+        tun.up(Some(8));
 
         let mut poll = Mio_Poll::new().unwrap();
         let mut events = Events::with_capacity(1024);
-        poll.registry().register(&mut client_socket, Token(0), Interest::READABLE).unwrap();
+        poll.registry()
+            .register(&mut client_socket, Token(0), Interest::READABLE)
+            .unwrap();
 
-        let mut  client = Device::Client {client_socket: client_socket, server_addr: server_addr, tun : tun, shared_secret_key : None, private_key : client_private_key, id: None, default_gateway: None};
+        let mut client = Device::Client {
+            client_socket: client_socket,
+            server_addr: server_addr,
+            tun: tun,
+            shared_secret_key: None,
+            private_key: client_private_key,
+            id: None,
+            default_gateway: None,
+        };
         client.initiate_handshake().unwrap();
 
         let mut shared_secret_key = None;
 
         for _ in 0..10 {
-            poll.poll(&mut events, Some(Duration::from_secs(1))).unwrap();
+            poll.poll(&mut events, Some(Duration::from_secs(1)))
+                .unwrap();
             for event in &events {
                 if event.token() == Token(0) && event.is_readable() {
                     let mut buffer = [0; 2000];
-                    if let Device::Client { client_socket, ..} = &client {
-
+                    if let Device::Client { client_socket, .. } = &client {
                         let len = client_socket.recv(&mut buffer).unwrap();
                         if let Ok(msg) = serde_json::from_slice::<Message>(&buffer[..len]) {
                             shared_secret_key = Some(client.process_response(msg).unwrap());
                             println!("The shared secret key is {:?}", shared_secret_key);
                             return;
                         }
-
                     }
                 }
             }
         }
-        assert!(shared_secret_key.is_some(), "Failed to establish shared secret key");
+        assert!(
+            shared_secret_key.is_some(),
+            "Failed to establish shared secret key"
+        );
     }
 
     #[test]
@@ -246,36 +328,48 @@ mod tests {
         let server_private_key: BigInt = "70".parse().unwrap();
 
         let mut server_socket = UdpSocket::bind(server_addr).unwrap();
-        let tun = TunDevice::create(None).unwrap(); 
-        tun.up(None); 
+        let tun = TunDevice::create(None).unwrap();
+        tun.up(None);
 
         let mut poll = Mio_Poll::new().unwrap();
         let mut events = Events::with_capacity(1024);
 
-        poll.registry().register(&mut server_socket, Token(0), Interest::READABLE).unwrap();
+        poll.registry()
+            .register(&mut server_socket, Token(0), Interest::READABLE)
+            .unwrap();
 
-        let mut server = Device::Server {server_socket: server_socket, client_key_map: HashMap::new(), tun : tun, private_key : server_private_key, available_ids: (2..101).collect()};
+        let mut server = Device::Server {
+            server_socket: server_socket,
+            client_key_map: HashMap::new(),
+            tun: tun,
+            private_key: server_private_key,
+            available_ids: (2..101).collect(),
+        };
 
         let mut shared_secret_key = None;
 
-        for _ in 0..10 {  // Try for 10 iterations
-            poll.poll(&mut events, Some(Duration::from_secs(1))).unwrap();
+        for _ in 0..10 {
+            // Try for 10 iterations
+            poll.poll(&mut events, Some(Duration::from_secs(1)))
+                .unwrap();
             for event in &events {
                 if event.token() == Token(0) && event.is_readable() {
-                    if let Device::Server { server_socket, ..} = &server {
-                        
+                    if let Device::Server { server_socket, .. } = &server {
                         let mut buffer = [0; 2000];
                         let (len, client_addr) = server_socket.recv_from(&mut buffer).unwrap();
                         if let Ok(msg) = serde_json::from_slice::<Message>(&buffer[..len]) {
-                            shared_secret_key = Some(server.process_request( &client_addr,  msg).unwrap());
+                            shared_secret_key =
+                                Some(server.process_request(&client_addr, msg).unwrap());
                             println!("The shared secret key is {:?}", shared_secret_key);
                             return;
                         }
-
                     }
                 }
             }
         }
-        assert!(shared_secret_key.is_some(), "Failed to establish shared secret key");
+        assert!(
+            shared_secret_key.is_some(),
+            "Failed to establish shared secret key"
+        );
     }
 }
