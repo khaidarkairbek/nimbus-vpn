@@ -20,4 +20,4 @@ thiserror = "1.0"
 ctrlc = { version = "3.4.4", features = ["termination"] }
 
 [dev-dependencies]
-rustfmt = "2.0.0"
+rustfmt = "0.10.0"
