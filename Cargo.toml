@@ -9,7 +9,7 @@ about = "Command line application for client- and server-side VPN communication"
 clap = { version = "4.5.8", features = ["derive"] }
 libc =  "0.2.155"
 mio = {version = "1", features = ["os-poll", "os-ext", "net"]}
-num-bigint = {version = "0.4", features = ["serde"]}
+num-bigint = {version = "0.4", features = ["serde", "rand"]}
 serde = {version = "1.0.203", features = ["derive"]}
 serde_json = "1.0"
 chacha20poly1305 = "0.10.0"

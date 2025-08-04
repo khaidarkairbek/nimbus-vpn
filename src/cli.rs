@@ -20,25 +20,13 @@ pub enum Mode {
         /// Remote port of the server
         #[arg(short, long)]
         port: u16,
-        /// Private key of the client
-        #[arg(short, long)]
-        key: String,
         /// Local port of the client (Optional)
         #[arg(long)]
-        local_port: Option<String>,
-        /// The number of tun device to be created and used (Optional)
-        #[arg(long)]
-        tun_num: Option<u8>,
+        local_port: u16
     },
     Server {
         /// Local port of the server
         #[arg(short, long)]
         port: u16,
-        /// Private key of the server
-        #[arg(short, long)]
-        key: String,
-        /// The number of tun device to be created and used (Optional)
-        #[arg(long)]
-        tun_num: Option<u8>,
     },
 }

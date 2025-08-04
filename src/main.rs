@@ -1,72 +1,30 @@
-mod cli;
-mod comm;
-mod crypto;
-mod dev;
-mod error;
-mod tun;
-
-use crate::cli::Mode;
 use clap::Parser;
-use comm::{client_side, server_side};
-use num_bigint::BigInt;
-use std::{
-    net::SocketAddr,
-    process,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
+
+use crate::{cli::Mode, client::Client, server::Server};
+
+mod cli;
+mod crypto;
+mod comm;
+mod error;
+mod server; 
+mod client;
+mod tun;  
 
 fn main() {
-    let args = cli::Cli::parse();
-
-    let running: Arc<AtomicBool> = Arc::new(AtomicBool::new(true));
-    let r: Arc<AtomicBool> = running.clone();
-
-    ctrlc::set_handler(move || {
-        r.store(false, Ordering::Relaxed);
-    })
-    .expect("Error setting Ctrl-C handler");
+    let args = cli::Cli::parse(); 
 
     match args.mode {
-        Mode::Client {
-            address,
-            port,
-            key,
-            local_port,
-            tun_num,
-        } => {
-            let server_addr: SocketAddr = format!("{}:{}", address, port).parse().unwrap();
-            let client_addr: SocketAddr = match local_port {
-                None => "0.0.0.0:0".parse().unwrap(),
-                Some(port) => format!("0.0.0.0:{}", port).parse().unwrap(),
-            };
-            let client_private_key: BigInt = key.parse().unwrap();
-            client_side(
-                client_addr,
-                server_addr,
-                tun_num,
-                client_private_key,
-                running.clone(),
-            )
-            .unwrap();
-        }
-        Mode::Server { port, key, tun_num } => {
-            let server_addr: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
-            // the public ip of the server: curl -s https://ifconfig.me
-            let public_addr: String = String::from_utf8(
-                process::Command::new("curl")
-                    .arg("-s")
-                    .arg("https://ifconfig.me")
-                    .output()
-                    .unwrap()
-                    .stdout,
-            )
-            .unwrap();
-            println!("Server address is: {:?}", public_addr);
-            let server_private_key: BigInt = key.parse().unwrap();
-            server_side(server_addr, tun_num, server_private_key).unwrap();
+        Mode::Client { address, port, local_port } => {
+            let server_addr = format!("{address}:{port}").parse().unwrap(); 
+            let mut client = Client::init(local_port, server_addr).unwrap();
+
+            client.start().unwrap(); 
+        }, 
+        Mode::Server { port } => {
+            let mut server = Server::init(port).unwrap(); 
+            server.start().unwrap(); 
         }
     }
 }
+
+

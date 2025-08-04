@@ -2,7 +2,7 @@ use anyhow::Result;
 use chacha20poly1305::aead::generic_array::GenericArray;
 use chacha20poly1305::aead::{Aead, KeyInit, OsRng};
 use chacha20poly1305::{AeadCore, ChaCha20Poly1305};
-use num_bigint::BigInt;
+use num_bigint::BigUint;
 
 use crate::error::CryptoError::*;
 
@@ -10,15 +10,15 @@ use crate::error::CryptoError::*;
 const DH_MODULUS: &'static str = "23"; // Placeholder values for testing
 const DH_BASE: &'static str = "5";
 
-pub fn generate_public_key(private_key: &BigInt) -> BigInt {
-    let p: BigInt = DH_MODULUS.parse().unwrap(); //parse the modulus
-    let g: BigInt = DH_BASE.parse().unwrap(); //parse the base
+pub fn generate_public_key(private_key: &BigUint) -> BigUint {
+    let p: BigUint = DH_MODULUS.parse().unwrap(); //parse the modulus
+    let g: BigUint = DH_BASE.parse().unwrap(); //parse the base
 
     g.modpow(private_key, &p)
 }
 
-pub fn generate_shared_key(public_key: &BigInt, private_key: &BigInt) -> BigInt {
-    let p: BigInt = DH_MODULUS.parse().unwrap(); //parse the modulus
+pub fn generate_shared_key(public_key: &BigUint, private_key: &BigUint) -> BigUint {
+    let p: BigUint = DH_MODULUS.parse().unwrap(); //parse the modulus
 
     public_key.modpow(private_key, &p)
 }
@@ -30,8 +30,8 @@ fn pad_key_to_32_bytes(key: &[u8]) -> [u8; 32] {
     padded_key_bytes
 }
 
-pub fn encrypt_data(data: &[u8], key: &BigInt) -> Result<Vec<u8>> {
-    let (_, key_in_bytes) = key.to_bytes_le(); //convert bigint key to a byte array (extract vec<u8>)
+pub fn encrypt_data(data: &[u8], key: &BigUint) -> Result<Vec<u8>> {
+    let key_in_bytes = key.to_bytes_le(); //convert BigUint key to a byte array (extract vec<u8>)
     let key_bytes_pad = pad_key_to_32_bytes(&key_in_bytes); //pad key to 32 bytes
     let cipher = ChaCha20Poly1305::new(GenericArray::from_slice(&key_bytes_pad)); //create chacha20-poly1305 instance with the padded key
     let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng); //generate random nonce
@@ -43,8 +43,8 @@ pub fn encrypt_data(data: &[u8], key: &BigInt) -> Result<Vec<u8>> {
     Ok(result)
 }
 
-pub fn decrypt_data(cipher_text: &[u8], key: &BigInt) -> Result<Vec<u8>> {
-    let (_, key_in_bytes) = key.to_bytes_le(); //convert bigint key to a byte array (extract vec<u8>)
+pub fn decrypt_data(cipher_text: &[u8], key: &BigUint) -> Result<Vec<u8>> {
+    let key_in_bytes = key.to_bytes_le(); //convert BigUint key to a byte array (extract vec<u8>)
     let key_bytes_pad = pad_key_to_32_bytes(&key_in_bytes); //pad key to 32 bytes
     let cipher = ChaCha20Poly1305::new(GenericArray::from_slice(&key_bytes_pad)); //create chacha20-poly1305 instance with the padded key
     let (nonce, cipher_text) = cipher_text.split_at(12); //split the cipher text into nonce and actual ciphertext
@@ -58,7 +58,7 @@ pub fn decrypt_data(cipher_text: &[u8], key: &BigInt) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use num_bigint::BigInt;
+    use num_bigint::BigUint;
     use rand::Rng;
 
     #[test]
@@ -100,7 +100,7 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt() {
         let data = b"Hello, world!";
-        let key = BigInt::parse_bytes(b"1234567890123456789012345678901234567890", 10).unwrap();
+        let key = BigUint::parse_bytes(b"1234567890123456789012345678901234567890", 10).unwrap();
 
         //encrypt the data
         let encrypted_data = encrypt_data(data, &key).expect("Encryption failed");
@@ -117,7 +117,7 @@ mod tests {
         let mut rng = rand::thread_rng();
         let mut data = vec![0u8; 128]; //generate 128 bytes of random data
         rng.fill(&mut data[..]);
-        let key = BigInt::parse_bytes(b"9876543210987654321098765432109876543210", 10).unwrap();
+        let key = BigUint::parse_bytes(b"9876543210987654321098765432109876543210", 10).unwrap();
 
         //encrypt the data
         let encrypted_data = encrypt_data(&data, &key).expect("Encryption failed");
@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_with_empty_data() {
         let data = b"";
-        let key = BigInt::parse_bytes(b"1234567890123456789012345678901234567890", 10).unwrap();
+        let key = BigUint::parse_bytes(b"1234567890123456789012345678901234567890", 10).unwrap();
 
         //encrypt the data
         let encrypted_data = encrypt_data(data, &key).expect("Encryption failed");
@@ -149,7 +149,7 @@ mod tests {
         let mut rng = rand::thread_rng();
         let mut data = vec![0u8; 1024 * 1024]; //generate 1mb of random data
         rng.fill(&mut data[..]);
-        let key = BigInt::parse_bytes(b"9876543210987654321098765432109876543210", 10).unwrap();
+        let key = BigUint::parse_bytes(b"9876543210987654321098765432109876543210", 10).unwrap();
 
         //encrypt the data
         let encrypted_data = encrypt_data(&data, &key).expect("Encryption failed");
@@ -164,7 +164,7 @@ mod tests {
     #[test]
     fn test_decrypt_with_modified_ciphertext() {
         let data = b"Hello, world!";
-        let key = BigInt::parse_bytes(b"1234567890123456789012345678901234567890", 10).unwrap();
+        let key = BigUint::parse_bytes(b"1234567890123456789012345678901234567890", 10).unwrap();
 
         //encrypt the data
         let mut encrypted_data = encrypt_data(data, &key).expect("Encryption failed");
@@ -186,9 +186,9 @@ mod tests {
     fn test_encrypt_decrypt_with_varied_keys() {
         let data = b"Hello, world!";
         let keys = vec![
-            BigInt::parse_bytes(b"1234567890123456789012345678901234567890", 10).unwrap(),
-            BigInt::parse_bytes(b"2234567890123456789012345678901234567890", 10).unwrap(),
-            BigInt::parse_bytes(b"3234567890123456789012345678901234567890", 10).unwrap(),
+            BigUint::parse_bytes(b"1234567890123456789012345678901234567890", 10).unwrap(),
+            BigUint::parse_bytes(b"2234567890123456789012345678901234567890", 10).unwrap(),
+            BigUint::parse_bytes(b"3234567890123456789012345678901234567890", 10).unwrap(),
         ];
 
         for key in keys {
