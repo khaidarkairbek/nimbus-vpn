@@ -22,7 +22,6 @@ pub struct Client {
     tun: TunDevice,
     shared_secret_key: Option<BigUint>,
     private_key: BigUint,
-    id: Option<u8>,
 }
 
 impl Client {
@@ -37,7 +36,6 @@ impl Client {
             tun: TunDevice::new(tun_config)?,
             shared_secret_key: None,
             private_key,
-            id: None,
         };
 
         Ok(client)
@@ -71,11 +69,9 @@ impl Client {
 
     pub fn process_response(&mut self, response_msg: Message) -> Result<BigUint> {
         if let Message::Response {
-            client_id,
             public_key,
         } = response_msg
         {
-            self.id = Some(client_id);
             let shared_secret_key = generate_shared_key(&public_key, &self.private_key);
             Ok(shared_secret_key)
         } else {
@@ -155,7 +151,7 @@ impl Client {
                                     let shared_secret_key = self.process_response(msg)?;
                                     self.set_shared_secret_key(shared_secret_key);
                                 }
-                                Message::PayLoad { client_id: _, data } => {
+                                Message::PayLoad { data } => {
                                     if let Ok(key) = self.get_shared_secret_key() {
                                         let decrypted_data = decrypt_data(&data, key)?;
                                         self.write_tun(decrypted_data)?;
@@ -180,7 +176,6 @@ impl Client {
 
                                 if let Ok(key) = self.get_shared_secret_key() {
                                     let msg = Message::PayLoad {
-                                        client_id: self.id.unwrap(),
                                         data: encrypt_data(data, key)?,
                                     };
                                     let serialized = serde_json::to_string::<Message>(&msg)
@@ -241,10 +236,10 @@ mod tests {
                 if let Ok((client_addr, msg)) = server.read_socket() {
                     assert_eq!(client_addr, _client_addr); 
 
-                    let (client_id, shared_secret_key) =
+                    let shared_secret_key =
                         server.process_request(&client_addr, msg).unwrap();
                     server
-                        .set_shared_secret_key(shared_secret_key, Some((client_id, client_addr)))
+                        .set_shared_secret_key(shared_secret_key, client_addr)
                         .unwrap();
 
                     connection_established = true; 
@@ -260,9 +255,9 @@ mod tests {
                 if let Ok((client_addr, msg)) = server.read_socket() {
                     assert_eq!(client_addr, _client_addr);
                     match msg {
-                        Message::PayLoad { client_id, data } => {
+                        Message::PayLoad { data } => {
                             let (client_addr, shared_key) =
-                                server.get_shared_secret_key(client_id).unwrap();
+                                server.get_shared_secret_key().unwrap();
 
                             let decrypted_data = decrypt_data(&data, shared_key).unwrap();
                             assert_eq!(*client_addr, _client_addr); 

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io::{Read, Write}, net::SocketAddr, os::fd::AsRawFd, process, time::Duration};
+use std::{io::{Read, Write}, net::SocketAddr, os::fd::AsRawFd, process, time::Duration};
 
 use anyhow::{bail, Result};
 use mio::{net::UdpSocket, unix::SourceFd, Events, Interest, Poll, Token};
@@ -14,10 +14,9 @@ use crate::{
 
 pub struct Server {
     socket: UdpSocket,
-    client_key_map: HashMap<u8, (SocketAddr, BigUint)>,
+    client: Option<(SocketAddr, BigUint)>,
     tun: TunDevice,
     private_key: BigUint,
-    available_ids: Vec<u8>,
 }
 
 impl Server {
@@ -30,10 +29,9 @@ impl Server {
 
         let server = Server {
             socket,
-            client_key_map: HashMap::new(),
+            client: None,
             tun: TunDevice::new(tun_config)?,
             private_key,
-            available_ids: (2..101).collect(),
         };
 
         Ok(server)
@@ -42,22 +40,20 @@ impl Server {
     pub fn set_shared_secret_key(
         &mut self,
         new_key: BigUint,
-        client_info: Option<(u8, SocketAddr)>,
+        client_addr: SocketAddr,
     ) -> Result<()> {
-        if let Some((id, addr)) = client_info {
-            self.client_key_map.insert(id, (addr, new_key));
+        if let None = self.client {
+            self.client = Some((client_addr, new_key)); 
             Ok(())
         } else {
             bail!(ServerError::ClientInfoSetError)
         }
     }
 
-    pub fn get_shared_secret_key(&self, client_id: u8) -> Result<(&SocketAddr, &BigUint)> {
-        match self.client_key_map.get(&client_id) {
-            None => bail!(ServerError::ClientInfoGetError),
-            Some((client_addr, shared_key)) => {
-                Ok((client_addr, shared_key))
-            }
+    pub fn get_shared_secret_key(&self,) -> Result<(&SocketAddr, &BigUint)> {
+        match &self.client {
+            None => bail!(ServerError::ClientInfoGetError), 
+            Some((addr, key)) => Ok((addr, key))
         }
     }
 
@@ -65,52 +61,37 @@ impl Server {
         &mut self,
         client_addr: &SocketAddr,
         request_msg: Message,
-    ) -> Result<(u8, BigUint)> {
+    ) -> Result<BigUint> {
         if let Message::Request { public_key: client_public_key } = request_msg {
             let public_key = generate_public_key(&self.private_key);
-            match self.available_ids.pop() {
-                Some(client_id) => {
-                    let response_msg = Message::Response {
-                        client_id,
-                        public_key,
-                    };
-                    let serialized = serde_json::to_string::<Message>(&response_msg)
-                        .map_err(|e| CommError::SerialError(e.to_string()))?;
+            let response_msg = Message::Response {
+                public_key,
+            };
+            let serialized = serde_json::to_string::<Message>(&response_msg)
+                .map_err(|e| CommError::SerialError(e.to_string()))?;
 
-                    self.socket
-                        .send_to(serialized.as_bytes(), client_addr.clone())
-                        .map_err(|e| SocketError::SocketSendToError(e.to_string()))?;
+            self.socket
+                .send_to(serialized.as_bytes(), client_addr.clone())
+                .map_err(|e| SocketError::SocketSendToError(e.to_string()))?;
 
-                    let shared_secret_key =
-                        generate_shared_key(&client_public_key, &self.private_key);
+            let shared_secret_key =
+                generate_shared_key(&client_public_key, &self.private_key);
 
-                    Ok((client_id, shared_secret_key))
-                }
-                None => {
-                    bail!(ServerError::ServerPortError)
-                }
-            }
+            Ok(shared_secret_key)
         } else {
             bail!(LogicError::IncorrectMessageError)
         }
     }
 
-    pub fn write_socket(&mut self, data: &[u8], client_id: u8) -> Result<()> {
-        match self.client_key_map.get(&client_id) {
-            Some((client_addr, _)) => {
-                let mut bytes_written = 0;
-                while bytes_written < data.len() {
-                    bytes_written += self
-                        .socket
-                        .send_to(&data[bytes_written..data.len()], *client_addr)
-                        .map_err(|e| SocketError::SocketSendToError(e.to_string()))?;
-                }
-                Ok(())
-            }
-            None => {
-                bail!(ServerError::ClientInfoNotFound)
-            }
+    pub fn write_socket(&self, data: &[u8], client_addr: &SocketAddr) -> Result<()> {
+        let mut bytes_written = 0;
+        while bytes_written < data.len() {
+            bytes_written += self
+                .socket
+                .send_to(&data[bytes_written..data.len()], *client_addr)
+                .map_err(|e| SocketError::SocketSendToError(e.to_string()))?;
         }
+        Ok(())
     }
 
     pub fn read_socket(&mut self) -> Result<(SocketAddr, Message)> {
@@ -190,14 +171,14 @@ impl Server {
                     Token(0) => match self.read_socket() {
                         Ok((client_addr, msg)) => match msg {
                             Message::Request { .. } => {
-                                let (client_id, shared_secret_key) = self.process_request(&client_addr, msg)?;
+                                let shared_secret_key = self.process_request(&client_addr, msg)?;
                                 self.set_shared_secret_key(
                                     shared_secret_key,
-                                    Some((client_id, client_addr)),
+                                    client_addr,
                                 )?;
                             }
-                            Message::PayLoad { client_id, data } => {
-                                let shared_secret = self.get_shared_secret_key(client_id);
+                            Message::PayLoad { data } => {
+                                let shared_secret = self.get_shared_secret_key();
                                 if let Ok((_, key)) = shared_secret
                                 {
                                     let decrypted_data = decrypt_data(&data, key)?;
@@ -220,20 +201,17 @@ impl Server {
                                 }
 
                                 let data = &buffer[..len];
-                                let client_internal_tun_address = &data[16..=19];
-                                let client_id = client_internal_tun_address[3];
-                                let shared_secret = self.get_shared_secret_key(client_id);
+                                let shared_secret = self.get_shared_secret_key();
 
-                                if let Ok((_, key)) = shared_secret
+                                if let Ok((client_addr, key)) = shared_secret
                                 {
                                     let encrypted_data = encrypt_data(data, key)?;
                                     let msg = Message::PayLoad {
-                                        client_id: client_id,
                                         data: encrypted_data,
                                     };
                                     let serialized = serde_json::to_string::<Message>(&msg)
                                         .map_err(|e| CommError::SerialError(e.to_string()))?;
-                                    if let Err(e) = self.write_socket(serialized.as_bytes(), client_id)
+                                    if let Err(e) = self.write_socket(serialized.as_bytes(), client_addr)
                                     {
                                         eprintln!("Error: {}", e.to_string());
                                     }

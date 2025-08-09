@@ -8,11 +8,9 @@ pub enum Message {
         public_key: BigUint,
     },
     Response {
-        client_id: u8,
         public_key: BigUint,
     },
     PayLoad {
-        client_id: u8,
         data: Vec<u8>,
     },
 }
@@ -36,7 +34,7 @@ mod tests {
 
             for _ in 0..10 {
                 if let Ok((client_addr, msg)) = server.read_socket() {
-                    let shared_secret_key = Some(server.process_request(&client_addr, msg).unwrap().1);
+                    let shared_secret_key = Some(server.process_request(&client_addr, msg).unwrap());
                     return shared_secret_key;
                 }
 

@@ -24,6 +24,7 @@ pub enum TunOperationError {
 }
 
 #[derive(Error, Debug)]
+#[expect(unused)]
 pub enum ServerError {
     #[error("Client address is not specified for a key.")]
     ClientInfoSetError,
