@@ -1,6 +1,6 @@
 use num_bigint::{BigUint};
 use serde::{Deserialize, Serialize};
-use std::{net::SocketAddr, str};
+use std::str;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Message {
@@ -17,27 +17,22 @@ pub enum Message {
     },
 }
 
-pub enum SecretData<'a> {
-    SharedSecretKey(&'a BigUint),
-    SharedSecretClientData(&'a SocketAddr, &'a BigUint),
-}
-
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
     use std::time::Duration;
     use std::thread;
     use crate::client::Client;
     use crate::server::Server;
-
-    use super::*;
+    use crate::tun::config::Configuration;
 
     #[test]
     fn test_handshake() {
         let server_addr: SocketAddr = "127.0.0.1:8081".parse().unwrap();
 
         let server_thread = thread::spawn(move || {
-            let mut server = Server::init(8081).unwrap();
+            let mut server = Server::init(8081, &Configuration::default()).unwrap();
 
             for _ in 0..10 {
                 if let Ok((client_addr, msg)) = server.read_socket() {
@@ -52,7 +47,7 @@ mod tests {
         });
 
         let client_thread = thread::spawn(move || {
-            let mut client = Client::init(8080, server_addr).unwrap(); 
+            let mut client = Client::init(8080, server_addr, &Configuration::default()).unwrap(); 
 
             client.initiate_handshake().unwrap(); 
 

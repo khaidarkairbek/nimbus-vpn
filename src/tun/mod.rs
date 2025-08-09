@@ -229,11 +229,7 @@ impl TunDevice {
     }
 
     fn set_route(&mut self, route: Route) -> Result<()> {
-        println!("===========================");
-        println!("Setting route: {:?}", route);
-
         if let Some(prev_route) = &self.route {
-            println!("Deleting previous route: {:?}", prev_route);
             let prefix_len: u8 = prev_route
                 .netmask
                 .octets()
@@ -242,12 +238,6 @@ impl TunDevice {
                 .sum();
             let network =
                 Ipv4Addr::from(u32::from(prev_route.addr) & u32::from(prev_route.netmask));
-            println!(
-                "Command: route -n delete -net {}/{} {}",
-                network,
-                prefix_len,
-                prev_route.dest.to_string()
-            );
             if process::Command::new("route")
                 .arg("-n")
                 .arg("delete")
@@ -260,8 +250,6 @@ impl TunDevice {
             {
                 return Err(Error::last_os_error());
             };
-
-            println!("Succesfully deleted previous route");
         }
 
         let prefix_len: u8 = route
@@ -271,14 +259,6 @@ impl TunDevice {
             .iter()
             .sum();
         let network = Ipv4Addr::from(u32::from(route.addr) & u32::from(route.netmask));
-
-        println!("Adding new route: {:?}", route);
-        println!(
-            "Command: route -n add -net {}/{} {}",
-            network,
-            prefix_len,
-            route.dest.to_string()
-        );
 
         if process::Command::new("route")
             .arg("-n")
@@ -292,9 +272,6 @@ impl TunDevice {
         {
             return Err(Error::last_os_error());
         };
-
-        println!("Succesfully added new route");
-        println!("===========================");
 
         self.route = Some(route);
 

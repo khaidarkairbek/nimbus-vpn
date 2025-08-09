@@ -2,6 +2,7 @@ use std::io;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[expect(unused)]
 pub enum TunInitError {
     #[error("Problem opening a socket.")]
     TunSocketOpenError(#[from] io::Error),
@@ -14,6 +15,7 @@ pub enum TunInitError {
 }
 
 #[derive(Error, Debug)]
+#[expect(unused)]
 pub enum TunOperationError {
     #[error("Problem writing to TUN device.")]
     TunWriteError(io::Error),
@@ -40,6 +42,7 @@ pub enum ClientError {
 }
 
 #[derive(Error, Debug)]
+#[expect(unused)]
 pub enum SocketError {
     #[error("Socket send error.")]
     SocketSendToError(String),
@@ -50,6 +53,7 @@ pub enum SocketError {
 }
 
 #[derive(Error, Debug)]
+#[expect(unused)]
 pub enum LogicError {
     #[error("Unexpected behavior.")]
     IncorrectRecepientError,
@@ -58,6 +62,7 @@ pub enum LogicError {
 }
 
 #[derive(Error, Debug)]
+#[expect(unused)]
 pub enum CommError {
     #[error("Mio Poll registry error.")]
     MioRegistryError,

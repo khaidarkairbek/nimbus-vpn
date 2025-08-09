@@ -6,7 +6,7 @@ use num_bigint::{BigUint, RandBigInt};
 use rand::thread_rng;
 
 use crate::{
-    comm::{Message, SecretData},
+    comm::Message,
     crypto::{decrypt_data, encrypt_data, generate_public_key, generate_shared_key},
     error::{CommError, LogicError, ServerError, SocketError},
     tun::{config::Configuration, TunDevice},
@@ -21,7 +21,7 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn init(port: u16) -> Result<Self> {
+    pub fn init(port: u16, tun_config: &Configuration) -> Result<Self> {
         let server_addr = format!("127.0.0.1:{}", port).parse()?;
         let socket = UdpSocket::bind(server_addr)?;
         let private_key = thread_rng().gen_biguint(256);
@@ -31,7 +31,7 @@ impl Server {
         let server = Server {
             socket,
             client_key_map: HashMap::new(),
-            tun: TunDevice::new(&Configuration::default())?,
+            tun: TunDevice::new(tun_config)?,
             private_key,
             available_ids: (2..101).collect(),
         };
@@ -52,16 +52,12 @@ impl Server {
         }
     }
 
-    pub fn get_shared_secret_key(&self, client_id: Option<u8>) -> Result<SecretData> {
-        if let Some(id) = client_id {
-            match self.client_key_map.get(&id) {
-                None => bail!(ServerError::ClientInfoGetError),
-                Some((client_addr, shared_key)) => {
-                    Ok(SecretData::SharedSecretClientData(client_addr, shared_key))
-                }
+    pub fn get_shared_secret_key(&self, client_id: u8) -> Result<(&SocketAddr, &BigUint)> {
+        match self.client_key_map.get(&client_id) {
+            None => bail!(ServerError::ClientInfoGetError),
+            Some((client_addr, shared_key)) => {
+                Ok((client_addr, shared_key))
             }
-        } else {
-            bail!(ServerError::ClientInfoNotFound)
         }
     }
 
@@ -143,6 +139,7 @@ impl Server {
         Ok(len)
     }
 
+    #[expect(unused)]
     fn enable_ip_forwarding() -> Result<()> {
         if cfg!(target_os = "macos") {
             // MacOS: sysctl -w net.inet.ip.forwarding=1
@@ -183,6 +180,8 @@ impl Server {
             )
             .map_err(|_| CommError::MioRegistryError)?;
 
+        let mut buffer = [0u8; 2000];
+
         loop {
             poll.poll(&mut events, Some(Duration::from_millis(100)))
                 .map_err(|_| CommError::MioPollingError)?;
@@ -191,21 +190,22 @@ impl Server {
                     Token(0) => match self.read_socket() {
                         Ok((client_addr, msg)) => match msg {
                             Message::Request { .. } => {
-                                let (client_id, shared_secret_key) =
-                                    self.process_request(&client_addr, msg)?;
+                                let (client_id, shared_secret_key) = self.process_request(&client_addr, msg)?;
                                 self.set_shared_secret_key(
                                     shared_secret_key,
                                     Some((client_id, client_addr)),
                                 )?;
                             }
                             Message::PayLoad { client_id, data } => {
-                                let shared_secret = self.get_shared_secret_key(Some(client_id));
-                                if let Ok(SecretData::SharedSecretClientData(_, key)) =
-                                    shared_secret
+                                let shared_secret = self.get_shared_secret_key(client_id);
+                                if let Ok((_, key)) = shared_secret
                                 {
                                     let decrypted_data = decrypt_data(&data, key)?;
-                                    println!("IP packet received: {:?}", decrypted_data);
                                     self.write_tun(decrypted_data)?;
+                                } else {
+                                    eprintln!(
+                                        "Connection not yet set between client and server"
+                                    )
                                 }
                             }
                             _ => (),
@@ -213,29 +213,29 @@ impl Server {
                         Err(e) => eprintln!("The error: {}", e),
                     },
                     Token(1) => {
-                        let mut buffer = [0u8; 2000];
                         match self.read_tun(&mut buffer) {
                             Ok(len) => {
+                                if len == 0 {
+                                    continue; 
+                                }
+
                                 let data = &buffer[..len];
-                                if len > 0 {
-                                    let client_internal_tun_address = &data[16..=19];
-                                    let client_id = client_internal_tun_address[3];
-                                    let shared_secret = self.get_shared_secret_key(Some(client_id));
-                                    if let Ok(SecretData::SharedSecretClientData(_, key)) =
-                                        shared_secret
+                                let client_internal_tun_address = &data[16..=19];
+                                let client_id = client_internal_tun_address[3];
+                                let shared_secret = self.get_shared_secret_key(client_id);
+
+                                if let Ok((_, key)) = shared_secret
+                                {
+                                    let encrypted_data = encrypt_data(data, key)?;
+                                    let msg = Message::PayLoad {
+                                        client_id: client_id,
+                                        data: encrypted_data,
+                                    };
+                                    let serialized = serde_json::to_string::<Message>(&msg)
+                                        .map_err(|e| CommError::SerialError(e.to_string()))?;
+                                    if let Err(e) = self.write_socket(serialized.as_bytes(), client_id)
                                     {
-                                        let encrypted_data = encrypt_data(data, key)?;
-                                        let msg = Message::PayLoad {
-                                            client_id: client_id,
-                                            data: encrypted_data,
-                                        };
-                                        let serialized = serde_json::to_string::<Message>(&msg)
-                                            .map_err(|e| CommError::SerialError(e.to_string()))?;
-                                        if let Err(e) =
-                                            self.write_socket(serialized.as_bytes(), client_id)
-                                        {
-                                            eprintln!("Error: {}", e.to_string());
-                                        }
+                                        eprintln!("Error: {}", e.to_string());
                                     }
                                 }
                             }
@@ -248,8 +248,3 @@ impl Server {
         }
     }
 }
-
-// #[cfg(test)]
-// mod tests {
-//     fn test_
-// }
