@@ -279,8 +279,15 @@ impl TunDevice {
             }
 
             let mut addr: libc::sockaddr_in = mem::zeroed();
-            addr.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
-            addr.sin_family = libc::AF_INET as u8;
+            #[cfg(target_os = "macos")]
+            {
+                addr.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
+                addr.sin_family = libc::AF_INET as u8;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                addr.sin_family = libc::AF_INET as u16;
+            }
             addr.sin_addr = libc::in_addr {
                 s_addr: u32::from_ne_bytes(address.octets()),
             };
@@ -288,8 +295,15 @@ impl TunDevice {
             req.ifra_addr = *(&addr as *const _ as *const libc::sockaddr);
 
             let mut broadaddr: libc::sockaddr_in = mem::zeroed();
-            broadaddr.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
-            broadaddr.sin_family = libc::AF_INET as u8;
+            #[cfg(target_os = "macos")]
+            {
+                broadaddr.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
+                broadaddr.sin_family = libc::AF_INET as u8;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                broadaddr.sin_family = libc::AF_INET as u16;
+            }
             broadaddr.sin_addr = libc::in_addr {
                 s_addr: u32::from_ne_bytes(broadcast.octets()),
             };
@@ -297,8 +311,15 @@ impl TunDevice {
             req.ifra_broadaddr = *(&broadaddr as *const _ as *const libc::sockaddr);
 
             let mut mask: libc::sockaddr_in = mem::zeroed();
-            mask.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
-            mask.sin_family = libc::AF_INET as u8;
+            #[cfg(target_os = "macos")]
+            {
+                mask.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
+                mask.sin_family = libc::AF_INET as u8;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                mask.sin_family = libc::AF_INET as u16;
+            }
             mask.sin_addr = libc::in_addr {
                 s_addr: u32::from_ne_bytes(netmask.octets()),
             };
@@ -442,8 +463,15 @@ impl TunDevice {
             }
 
             let mut sockaddr: libc::sockaddr_in = mem::zeroed();
-            sockaddr.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
-            sockaddr.sin_family = libc::AF_INET as u8;
+            #[cfg(target_os = "macos")]
+            {
+                sockaddr.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
+                sockaddr.sin_family = libc::AF_INET as u8;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                sockaddr.sin_family = libc::AF_INET as u16;
+            }
             sockaddr.sin_addr = libc::in_addr {
                 s_addr: u32::from_ne_bytes(value.octets()),
             };
@@ -493,8 +521,15 @@ impl TunDevice {
             }
 
             let mut sockaddr: libc::sockaddr_in = mem::zeroed();
-            sockaddr.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
-            sockaddr.sin_family = libc::AF_INET as u8;
+            #[cfg(target_os = "macos")]
+            {
+                sockaddr.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
+                sockaddr.sin_family = libc::AF_INET as u8;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                sockaddr.sin_family = libc::AF_INET as u16;
+            }
             sockaddr.sin_addr = libc::in_addr {
                 s_addr: u32::from_ne_bytes(value.octets()),
             };
@@ -544,8 +579,15 @@ impl TunDevice {
             }
 
             let mut sockaddr: libc::sockaddr_in = mem::zeroed();
-            sockaddr.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
-            sockaddr.sin_family = libc::AF_INET as u8;
+            #[cfg(target_os = "macos")]
+            {
+                sockaddr.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
+                sockaddr.sin_family = libc::AF_INET as u8;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                sockaddr.sin_family = libc::AF_INET as u16;
+            }
             sockaddr.sin_addr = libc::in_addr {
                 s_addr: u32::from_ne_bytes(value.octets()),
             };
@@ -590,8 +632,15 @@ impl TunDevice {
             }
 
             let mut sockaddr: libc::sockaddr_in = mem::zeroed();
-            sockaddr.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
-            sockaddr.sin_family = libc::AF_INET as u8;
+            #[cfg(target_os = "macos")]
+            {
+                sockaddr.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
+                sockaddr.sin_family = libc::AF_INET as u8;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                sockaddr.sin_family = libc::AF_INET as u16;
+            }
             sockaddr.sin_addr = libc::in_addr {
                 s_addr: u32::from_ne_bytes(value.octets()),
             };
