@@ -101,7 +101,7 @@ impl Client {
         Ok((from_addr, msg))
     }
 
-    pub fn write_tun(&mut self, data: Vec<u8>) -> Result<()> {
+    pub fn write_tun(&mut self, data: &Vec<u8>) -> Result<()> {
         let mut bytes_written = 0;
         while bytes_written < data.len() {
             bytes_written += self.tun.write(&data[bytes_written..data.len()])?;
@@ -149,22 +149,26 @@ impl Client {
                             match msg {
                                 Message::Response { .. } => {
                                     let shared_secret_key = self.process_response(msg)?;
+                                    println!("[Handshake] Shared secret key: {:?}", shared_secret_key); 
                                     self.set_shared_secret_key(shared_secret_key);
                                 }
                                 Message::PayLoad { data } => {
+                                    println!("[Socket] Payload received");
                                     if let Ok(key) = self.get_shared_secret_key() {
                                         let decrypted_data = decrypt_data(&data, key)?;
-                                        self.write_tun(decrypted_data)?;
+                                        if let Err(e) = self.write_tun(&decrypted_data) {
+                                            eprintln!("[Socket] Tun write error: {}", e.to_string());
+                                        }
                                     } else {
                                         eprintln!(
-                                            "Connection not yet set between client and server"
+                                            "[Socket] Connection not yet set between client and server"
                                         )
                                     }
                                 }
                                 _ => (),
                             }
                         }
-                        Err(e) => eprintln!("The error: {}", e),
+                        Err(e) => eprintln!("[Socket] The read error: {}", e),
                     },
                     Token(1) => {
                         match self.read_tun(&mut buffer) {
@@ -175,6 +179,7 @@ impl Client {
                                 let data = &buffer[..len];
 
                                 if let Ok(key) = self.get_shared_secret_key() {
+                                    println!("[Tun] Payload received");
                                     let msg = Message::PayLoad {
                                         data: encrypt_data(data, key)?,
                                     };
@@ -185,15 +190,15 @@ impl Client {
 
                                     if let Err(e) = self.write_socket(serialized.as_bytes())
                                     {
-                                        eprintln!("Error: {}", e.to_string());
+                                        eprintln!("[Tun] Socket write error: {}", e.to_string());
                                     }
                                 } else {
                                     eprintln!(
-                                        "Connection not yet set between client and server"
+                                        "[Tun] Connection not yet set between client and server"
                                     )
                                 }
                             }
-                            Err(e) => eprintln!("The error: {}", e),
+                            Err(e) => eprintln!("[Tun] The read error: {}", e),
                         };
                     }
                     _ => (),

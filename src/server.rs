@@ -1,4 +1,4 @@
-use std::{io::{Read, Write}, net::SocketAddr, os::fd::AsRawFd, process, time::Duration};
+use std::{io::{Read, Write}, net::SocketAddr, os::fd::AsRawFd, process};
 
 use anyhow::{bail, Result};
 use mio::{net::UdpSocket, unix::SourceFd, Events, Interest, Poll, Token};
@@ -25,7 +25,7 @@ impl Server {
         let socket = UdpSocket::bind(server_addr)?;
         let private_key = thread_rng().gen_biguint(256);
 
-        //Server::enable_ip_forwarding()?;
+        Server::enable_ip_forwarding()?;
 
         let server = Server {
             socket,
@@ -105,7 +105,7 @@ impl Server {
         Ok((from_addr, msg))
     }
 
-    fn write_tun(&mut self, data: Vec<u8>) -> Result<()> {
+    fn write_tun(&mut self, data: &Vec<u8>) -> Result<()> {
         let mut bytes_written = 0;
 
         while bytes_written < data.len() {
@@ -120,13 +120,12 @@ impl Server {
         Ok(len)
     }
 
-    #[expect(unused)]
     fn enable_ip_forwarding() -> Result<()> {
         if cfg!(target_os = "macos") {
             // MacOS: sysctl -w net.inet.ip.forwarding=1
             let status = process::Command::new("sysctl")
                 .arg("-w")
-                .arg("net.net.ip.forwarding=1")
+                .arg("net.inet.ip.forwarding=1")
                 .status()?;
 
             assert!(status.success());
@@ -164,7 +163,7 @@ impl Server {
         let mut buffer = [0u8; 2000];
 
         loop {
-            poll.poll(&mut events, Some(Duration::from_millis(100)))
+            poll.poll(&mut events, None)
                 .map_err(|_| CommError::MioPollingError)?;
             for event in &events {
                 match event.token() {
@@ -172,6 +171,7 @@ impl Server {
                         Ok((client_addr, msg)) => match msg {
                             Message::Request { .. } => {
                                 let shared_secret_key = self.process_request(&client_addr, msg)?;
+                                println!("[Handshake] Shared secret key: {:?}", shared_secret_key); 
                                 self.set_shared_secret_key(
                                     shared_secret_key,
                                     client_addr,
@@ -179,19 +179,22 @@ impl Server {
                             }
                             Message::PayLoad { data } => {
                                 let shared_secret = self.get_shared_secret_key();
+                                println!("[Socket] Payload received");
                                 if let Ok((_, key)) = shared_secret
                                 {
                                     let decrypted_data = decrypt_data(&data, key)?;
-                                    self.write_tun(decrypted_data)?;
+                                    if let Err(e) = self.write_tun(&decrypted_data) {
+                                        eprintln!("[Socket] Tun write error: {}", e.to_string());
+                                    }
                                 } else {
                                     eprintln!(
-                                        "Connection not yet set between client and server"
+                                        "[Socket] Connection not yet set between client and server"
                                     )
                                 }
                             }
                             _ => (),
                         },
-                        Err(e) => eprintln!("The error: {}", e),
+                        Err(e) => eprintln!("[Socket] The read error: {}", e),
                     },
                     Token(1) => {
                         match self.read_tun(&mut buffer) {
@@ -201,23 +204,26 @@ impl Server {
                                 }
 
                                 let data = &buffer[..len];
-                                let shared_secret = self.get_shared_secret_key();
 
-                                if let Ok((client_addr, key)) = shared_secret
+                                if let Ok((client_addr, key)) = self.get_shared_secret_key()
                                 {
+                                    println!("[Tun] Payload received");
                                     let encrypted_data = encrypt_data(data, key)?;
                                     let msg = Message::PayLoad {
                                         data: encrypted_data,
                                     };
                                     let serialized = serde_json::to_string::<Message>(&msg)
                                         .map_err(|e| CommError::SerialError(e.to_string()))?;
-                                    if let Err(e) = self.write_socket(serialized.as_bytes(), client_addr)
-                                    {
-                                        eprintln!("Error: {}", e.to_string());
+                                    if let Err(e) = self.write_socket(serialized.as_bytes(), client_addr) {
+                                        eprintln!("[Tun] Socket write error: {}", e.to_string());
                                     }
+                                } else {
+                                    eprintln!(
+                                        "[Tun] Connection not yet set between client and server"
+                                    )
                                 }
                             }
-                            Err(e) => eprintln!("The error: {}", e),
+                            Err(e) => eprintln!("[Tun] The read error: {}", e),
                         };
                     }
                     _ => (),
