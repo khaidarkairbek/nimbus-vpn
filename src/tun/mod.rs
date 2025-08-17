@@ -27,6 +27,7 @@ struct Route {
 }
 
 impl TunDevice {
+    #[cfg(target_os = "macos")]
     pub fn new(config: &Configuration) -> Result<Self> {
         let mtu = config.mtu.unwrap_or(DEFAULT_MTU);
 
@@ -123,6 +124,98 @@ impl TunDevice {
                         .to_string()
                 },
                 tun: Tun::new(tun, mtu, config.platform_config.packet_information),
+                route: None,
+                ctl_fd,
+            }
+        };
+
+        if let Some(ip) = config.address {
+            device.set_address(ip)?;
+        }
+
+        if let Some(ip) = config.destination {
+            device.set_destination(ip)?;
+        }
+
+        if let Some(ip) = config.broadcast {
+            device.set_broadcast(ip)?;
+        }
+
+        if let Some(ip) = config.netmask {
+            device.set_netmask(ip)?;
+        }
+
+        if let Some(mtu) = config.mtu {
+            device.set_mtu(mtu)?;
+        } else {
+            device.set_mtu(DEFAULT_MTU)?;
+        }
+
+        if let Some(enabled) = config.enabled {
+            device.enable(enabled)?;
+        } else {
+            device.enable(true)?;
+        }
+
+        device.set_nonblock()?;
+
+        device.set_alias(
+            config.address.unwrap_or(Ipv4Addr::new(10, 0, 0, 1)),
+            config.destination.unwrap_or(Ipv4Addr::new(10, 0, 0, 255)),
+            config.netmask.unwrap_or(Ipv4Addr::new(255, 255, 255, 0)),
+            config.platform_config.enable_routing,
+        )?;
+
+        Ok(device)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn new(config: &Configuration) -> Result<Self> {
+        let mtu = config.mtu.unwrap_or(DEFAULT_MTU);
+
+        let id = if let Some(tun_name) = config.tun_name.as_ref() {
+            if tun_name.len() > libc::IFNAMSIZ {
+                return Err(Error::new(ErrorKind::InvalidData, "Too long tun name"));
+            }
+
+            if !tun_name.starts_with("tun") {
+                return Err(Error::new(ErrorKind::InvalidData, "Invalid tun name"));
+            }
+
+            tun_name[3..].parse::<u32>().unwrap() + 1_u32
+        } else {
+            0_u32
+        };
+
+        let mut device = unsafe {
+            let mut ifr: libc::ifreq = mem::zeroed(); 
+            let tun_name = format!("tun{}", id); 
+
+            let mut buffer  = Vec::<libc::c_char>::new(); 
+            for byte in tun_name.as_bytes().into_iter() {
+                buffer.push(*byte as libc::c_char)
+            }
+
+            ifr.ifr_name[..tun_name.len()].copy_from_slice(&buffer);
+
+            const IFF_TUN: libc::c_short = 0x0001;
+            const IFF_NO_PI: libc::c_short = 0x1000;
+            ifr.ifr_ifru.ifru_flags = IFF_TUN | IFF_NO_PI; 
+
+            let tun_fd = {
+                let fd = libc::open(c"/dev/net/tun".as_ptr() as *const _, libc::O_RDWR); 
+                let tun_fd = Fd::new(fd, true)?;
+                tunsetiff(tun_fd.as_raw_fd(), &mut ifr as *mut _ as *mut i32)?;
+
+                tun_fd
+            }; 
+
+            let ctl_fd = Fd::new(libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0), true)?;
+
+
+            TunDevice {
+                tun_name,
+                tun: Tun::new(tun_fd, mtu, config.platform_config.packet_information),
                 route: None,
                 ctl_fd,
             }
@@ -652,6 +745,8 @@ nix::ioctl_readwrite!(siocgifmtu, b'i', 51, libc::ifreq);
 // Set if mtu
 nix::ioctl_write_ptr!(siocsifmtu, b'i', 52, libc::ifreq);
 
+nix::ioctl_write_ptr!(tunsetiff, b'T', 202, libc::c_int);
+
 #[cfg(test)]
 mod tests {
     use std::{net::UdpSocket, time::Duration};
@@ -709,7 +804,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tun_device_new() {
+    fn test_tun_device_creation() {
         let dev = TunDevice::new(&Configuration::default()).unwrap();
 
         let ipv4_addresses = get_ipv4_addrs(&dev.tun_name()).unwrap();
