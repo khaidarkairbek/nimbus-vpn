@@ -27,10 +27,10 @@ mod tests {
 
     #[test]
     fn test_handshake() {
-        let server_addr: SocketAddr = "127.0.0.1:8081".parse().unwrap();
+        let server_addr: SocketAddr = "127.0.0.1:8083".parse().unwrap();
 
         let server_thread = thread::spawn(move || {
-            let mut server = Server::init(8081, &Configuration::default()).unwrap();
+            let mut server = Server::init(8083, &Configuration::default()).unwrap();
 
             for _ in 0..10 {
                 if let Ok((client_addr, msg)) = server.read_socket() {
@@ -45,7 +45,7 @@ mod tests {
         });
 
         let client_thread = thread::spawn(move || {
-            let mut client = Client::init(8080, server_addr, &Configuration::default()).unwrap(); 
+            let mut client = Client::init(8082, server_addr, &Configuration::default()).unwrap(); 
 
             client.initiate_handshake().unwrap(); 
 
