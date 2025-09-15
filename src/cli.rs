@@ -22,7 +22,7 @@ pub enum Mode {
         port: u16,
         /// Local port of the client (Optional)
         #[arg(long)]
-        local_port: u16
+        local_port: u16,
     },
     Server {
         /// Local port of the server

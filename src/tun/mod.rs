@@ -200,7 +200,12 @@ impl TunDevice {
 
             const IFF_TUN: libc::c_short = 0x0001;
             const IFF_NO_PI: libc::c_short = 0x1000;
-            ifr.ifr_ifru.ifru_flags = IFF_TUN | if config.platform_config.packet_information { 0 } else { IFF_NO_PI };
+            ifr.ifr_ifru.ifru_flags = IFF_TUN
+                | if config.platform_config.packet_information {
+                    0
+                } else {
+                    IFF_NO_PI
+                };
 
             let tun_fd = {
                 let fd = libc::open(c"/dev/net/tun".as_ptr() as *const _, libc::O_RDWR);
@@ -261,7 +266,6 @@ impl TunDevice {
         netmask: Ipv4Addr,
         enable_routing: bool,
     ) -> Result<()> {
-
         let tun_name = self.tun_name.clone();
         let ctl = &self.ctl_fd;
 
@@ -797,10 +801,10 @@ mod linux_sys {
     nix::ioctl_write_ptr!(tunsetiff, b'T', 202, libc::c_int);
 }
 
-#[cfg(target_os = "macos")]
-use macos_sys::*; 
 #[cfg(target_os = "linux")]
-use linux_sys::*; 
+use linux_sys::*;
+#[cfg(target_os = "macos")]
+use macos_sys::*;
 
 #[cfg(test)]
 mod tests {

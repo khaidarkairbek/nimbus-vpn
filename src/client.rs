@@ -26,7 +26,7 @@ pub struct Client {
 
 impl Client {
     pub fn init(port: u16, server_addr: SocketAddr, tun_config: &Configuration) -> Result<Self> {
-        let client_addr = format!("127.0.0.1:{}", port).parse()?;
+        let client_addr = format!("0.0.0.0:{}", port).parse()?;
         let socket = UdpSocket::bind(client_addr)?;
         let private_key = thread_rng().gen_biguint(256);
 
