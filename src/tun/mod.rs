@@ -188,10 +188,10 @@ impl TunDevice {
         };
 
         let mut device = unsafe {
-            let mut ifr: libc::ifreq = mem::zeroed(); 
-            let tun_name = format!("tun{}", id); 
+            let mut ifr: libc::ifreq = mem::zeroed();
+            let tun_name = format!("tun{}", id);
 
-            let mut buffer  = Vec::<libc::c_char>::new(); 
+            let mut buffer = Vec::<libc::c_char>::new();
             for byte in tun_name.as_bytes().into_iter() {
                 buffer.push(*byte as libc::c_char)
             }
@@ -200,18 +200,17 @@ impl TunDevice {
 
             const IFF_TUN: libc::c_short = 0x0001;
             const IFF_NO_PI: libc::c_short = 0x1000;
-            ifr.ifr_ifru.ifru_flags = IFF_TUN | IFF_NO_PI; 
+            ifr.ifr_ifru.ifru_flags = IFF_TUN | if config.platform_config.packet_information { 0 } else { IFF_NO_PI };
 
             let tun_fd = {
-                let fd = libc::open(c"/dev/net/tun".as_ptr() as *const _, libc::O_RDWR); 
+                let fd = libc::open(c"/dev/net/tun".as_ptr() as *const _, libc::O_RDWR);
                 let tun_fd = Fd::new(fd, true)?;
                 tunsetiff(tun_fd.as_raw_fd(), &mut ifr as *mut _ as *mut i32)?;
 
                 tun_fd
-            }; 
+            };
 
             let ctl_fd = Fd::new(libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0), true)?;
-
 
             TunDevice {
                 tun_name,
@@ -251,16 +250,10 @@ impl TunDevice {
 
         device.set_nonblock()?;
 
-        device.set_alias(
-            config.address.unwrap_or(Ipv4Addr::new(10, 0, 0, 1)),
-            config.destination.unwrap_or(Ipv4Addr::new(10, 0, 0, 255)),
-            config.netmask.unwrap_or(Ipv4Addr::new(255, 255, 255, 0)),
-            config.platform_config.enable_routing,
-        )?;
-
         Ok(device)
     }
 
+    #[cfg(target_os = "macos")]
     fn set_alias(
         &mut self,
         address: Ipv4Addr,
@@ -268,6 +261,7 @@ impl TunDevice {
         netmask: Ipv4Addr,
         enable_routing: bool,
     ) -> Result<()> {
+
         let tun_name = self.tun_name.clone();
         let ctl = &self.ctl_fd;
 
@@ -279,15 +273,8 @@ impl TunDevice {
             }
 
             let mut addr: libc::sockaddr_in = mem::zeroed();
-            #[cfg(target_os = "macos")]
-            {
-                addr.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
-                addr.sin_family = libc::AF_INET as u8;
-            }
-            #[cfg(target_os = "linux")]
-            {
-                addr.sin_family = libc::AF_INET as u16;
-            }
+            addr.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
+            addr.sin_family = libc::AF_INET as u8;
             addr.sin_addr = libc::in_addr {
                 s_addr: u32::from_ne_bytes(address.octets()),
             };
@@ -295,15 +282,8 @@ impl TunDevice {
             req.ifra_addr = *(&addr as *const _ as *const libc::sockaddr);
 
             let mut broadaddr: libc::sockaddr_in = mem::zeroed();
-            #[cfg(target_os = "macos")]
-            {
-                broadaddr.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
-                broadaddr.sin_family = libc::AF_INET as u8;
-            }
-            #[cfg(target_os = "linux")]
-            {
-                broadaddr.sin_family = libc::AF_INET as u16;
-            }
+            broadaddr.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
+            broadaddr.sin_family = libc::AF_INET as u8;
             broadaddr.sin_addr = libc::in_addr {
                 s_addr: u32::from_ne_bytes(broadcast.octets()),
             };
@@ -311,15 +291,8 @@ impl TunDevice {
             req.ifra_broadaddr = *(&broadaddr as *const _ as *const libc::sockaddr);
 
             let mut mask: libc::sockaddr_in = mem::zeroed();
-            #[cfg(target_os = "macos")]
-            {
-                mask.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
-                mask.sin_family = libc::AF_INET as u8;
-            }
-            #[cfg(target_os = "linux")]
-            {
-                mask.sin_family = libc::AF_INET as u16;
-            }
+            mask.sin_len = mem::size_of::<libc::sockaddr_in>() as u8;
+            mask.sin_family = libc::AF_INET as u8;
             mask.sin_addr = libc::in_addr {
                 s_addr: u32::from_ne_bytes(netmask.octets()),
             };
@@ -758,43 +731,76 @@ impl IntoRawFd for TunDevice {
     }
 }
 
-#[allow(non_camel_case_types)]
-pub struct ifaliasreq {
-    pub ifra_name: [libc::c_char; libc::IFNAMSIZ],
-    pub ifra_addr: libc::sockaddr,
-    pub ifra_broadaddr: libc::sockaddr,
-    pub ifra_mask: libc::sockaddr,
-}
-
 // https://github.com/realthunder/mac-headers/blob/master/usr/include/sys/sockio.h
 // Set interface alias address
-nix::ioctl_write_ptr!(siocaifaddr, b'i', 26, ifaliasreq);
-// Get ifnet flags
-nix::ioctl_readwrite!(siocgifflags, b'i', 17, libc::ifreq);
-// Set ifnet flags
-nix::ioctl_write_ptr!(siocsifflags, b'i', 16, libc::ifreq);
-// Get ifnet address
-nix::ioctl_readwrite!(siocgifaddr, b'i', 33, libc::ifreq);
-// Set ifnet address
-nix::ioctl_write_ptr!(siocsifaddr, b'i', 12, libc::ifreq);
-// Get p-p address
-nix::ioctl_readwrite!(siocgifdstaddr, b'i', 34, libc::ifreq);
-// Set p-p address
-nix::ioctl_write_ptr!(siocsifdstaddr, b'i', 14, libc::ifreq);
-// Get broadcast address
-nix::ioctl_readwrite!(siocgifbrdaddr, b'i', 35, libc::ifreq);
-// Set broadcast address
-nix::ioctl_write_ptr!(siocsifbrdaddr, b'i', 19, libc::ifreq);
-// Get net addr mask
-nix::ioctl_readwrite!(siocgifnetmask, b'i', 37, libc::ifreq);
-// Set net addr mask
-nix::ioctl_write_ptr!(siocsifnetmask, b'i', 22, libc::ifreq);
-// Get if mtu
-nix::ioctl_readwrite!(siocgifmtu, b'i', 51, libc::ifreq);
-// Set if mtu
-nix::ioctl_write_ptr!(siocsifmtu, b'i', 52, libc::ifreq);
+mod macos_sys {
+    #[allow(non_camel_case_types)]
+    pub struct ifaliasreq {
+        pub ifra_name: [libc::c_char; libc::IFNAMSIZ],
+        pub ifra_addr: libc::sockaddr,
+        pub ifra_broadaddr: libc::sockaddr,
+        pub ifra_mask: libc::sockaddr,
+    }
+    nix::ioctl_write_ptr!(siocaifaddr, b'i', 26, ifaliasreq);
+    // Get ifnet flags
+    nix::ioctl_readwrite!(siocgifflags, b'i', 17, libc::ifreq);
+    // Set ifnet flags
+    nix::ioctl_write_ptr!(siocsifflags, b'i', 16, libc::ifreq);
+    // Get ifnet address
+    nix::ioctl_readwrite!(siocgifaddr, b'i', 33, libc::ifreq);
+    // Set ifnet address
+    nix::ioctl_write_ptr!(siocsifaddr, b'i', 12, libc::ifreq);
+    // Get p-p address
+    nix::ioctl_readwrite!(siocgifdstaddr, b'i', 34, libc::ifreq);
+    // Set p-p address
+    nix::ioctl_write_ptr!(siocsifdstaddr, b'i', 14, libc::ifreq);
+    // Get broadcast address
+    nix::ioctl_readwrite!(siocgifbrdaddr, b'i', 35, libc::ifreq);
+    // Set broadcast address
+    nix::ioctl_write_ptr!(siocsifbrdaddr, b'i', 19, libc::ifreq);
+    // Get net addr mask
+    nix::ioctl_readwrite!(siocgifnetmask, b'i', 37, libc::ifreq);
+    // Set net addr mask
+    nix::ioctl_write_ptr!(siocsifnetmask, b'i', 22, libc::ifreq);
+    // Get if mtu
+    nix::ioctl_readwrite!(siocgifmtu, b'i', 51, libc::ifreq);
+    // Set if mtu
+    nix::ioctl_write_ptr!(siocsifmtu, b'i', 52, libc::ifreq);
+    nix::ioctl_write_ptr!(tunsetiff, b'T', 202, libc::c_int);
+}
 
-nix::ioctl_write_ptr!(tunsetiff, b'T', 202, libc::c_int);
+mod linux_sys {
+    // Get ifnet flags
+    nix::ioctl_read_bad!(siocgifflags, 0x8913, libc::ifreq);
+    // Set ifnet flags
+    nix::ioctl_write_ptr_bad!(siocsifflags, 0x8914, libc::ifreq);
+    // Get ifnet address
+    nix::ioctl_read_bad!(siocgifaddr, 0x8915, libc::ifreq);
+    // Set ifnet address
+    nix::ioctl_write_ptr_bad!(siocsifaddr, 0x8916, libc::ifreq);
+    // Get p-p address
+    nix::ioctl_read_bad!(siocgifdstaddr, 0x8917, libc::ifreq);
+    // Set p-p address
+    nix::ioctl_write_ptr_bad!(siocsifdstaddr, 0x8918, libc::ifreq);
+    // Get broadcast address
+    nix::ioctl_read_bad!(siocgifbrdaddr, 0x8919, libc::ifreq);
+    // Set broadcast address
+    nix::ioctl_write_ptr_bad!(siocsifbrdaddr, 0x891a, libc::ifreq);
+    // Get net addr mask
+    nix::ioctl_read_bad!(siocgifnetmask, 0x891b, libc::ifreq);
+    // Set net addr mask
+    nix::ioctl_write_ptr_bad!(siocsifnetmask, 0x891c, libc::ifreq);
+    // Get if mtu
+    nix::ioctl_read_bad!(siocgifmtu, 0x8921, libc::ifreq);
+    // Set if mtu
+    nix::ioctl_write_ptr_bad!(siocsifmtu, 0x8922, libc::ifreq);
+    nix::ioctl_write_ptr!(tunsetiff, b'T', 202, libc::c_int);
+}
+
+#[cfg(target_os = "macos")]
+use macos_sys::*; 
+#[cfg(target_os = "linux")]
+use linux_sys::*; 
 
 #[cfg(test)]
 mod tests {
@@ -899,17 +905,17 @@ mod tests {
         socket.send(&payload).unwrap();
 
         let mut tun_buf = [0u8; 1500];
-        let mut len_read= None; 
+        let mut len_read = None;
         for _ in 0..10 {
             if let Ok(len) = client_dev.read(&mut tun_buf) {
-                len_read = Some(len); 
-                break; 
+                len_read = Some(len);
+                break;
             } else {
-                std::thread::sleep(Duration::from_millis(10)); 
+                std::thread::sleep(Duration::from_millis(10));
             }
         }
 
-        assert!(len_read.is_some()); 
+        assert!(len_read.is_some());
         assert_eq!(tun_buf[..4], ((libc::AF_INET) as u32).to_be_bytes());
         assert_eq!(tun_buf[4] >> 4, 4);
         assert_eq!(tun_buf[32..len_read.unwrap()], payload);
