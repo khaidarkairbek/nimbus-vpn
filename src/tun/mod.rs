@@ -161,8 +161,8 @@ impl TunDevice {
 
         device.set_alias(
             config.address.unwrap_or(Ipv4Addr::new(10, 0, 0, 1)),
-            config.destination.unwrap_or(Ipv4Addr::new(10, 0, 0, 255)),
-            config.netmask.unwrap_or(Ipv4Addr::new(255, 255, 255, 0)),
+            config.destination.unwrap_or(Ipv4Addr::new(10, 0, 0, 2)),
+            config.netmask.unwrap_or(Ipv4Addr::new(255, 255, 255, 255)),
             config.platform_config.enable_routing,
         )?;
 
@@ -225,20 +225,16 @@ impl TunDevice {
             }
         };
 
-        if let Some(ip) = config.address {
-            device.set_address(ip)?;
-        }
+        let address = config.address.unwrap_or(Ipv4Addr::new(10, 0, 0, 2));
+        let destination = config.destination.unwrap_or(Ipv4Addr::new(10, 0, 0, 1)); 
+        let netmask = config.netmask.unwrap_or(Ipv4Addr::new(255, 255, 255, 255)); 
 
-        if let Some(ip) = config.destination {
-            device.set_destination(ip)?;
-        }
+        device.set_address(address)?; 
+        device.set_destination(destination)?; 
+        device.set_netmask(netmask)?;
 
         if let Some(ip) = config.broadcast {
             device.set_broadcast(ip)?;
-        }
-
-        if let Some(ip) = config.netmask {
-            device.set_netmask(ip)?;
         }
 
         if let Some(mtu) = config.mtu {
@@ -254,6 +250,16 @@ impl TunDevice {
         }
 
         device.set_nonblock()?;
+
+        if config.platform_config.enable_routing {
+            let route = Route {
+                addr: address,
+                netmask,
+                dest: destination,
+            };
+
+            device.set_route(route)?;
+        }
 
         Ok(device)
     }
