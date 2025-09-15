@@ -226,11 +226,11 @@ impl TunDevice {
         };
 
         let address = config.address.unwrap_or(Ipv4Addr::new(10, 0, 0, 2));
-        let destination = config.destination.unwrap_or(Ipv4Addr::new(10, 0, 0, 1)); 
-        let netmask = config.netmask.unwrap_or(Ipv4Addr::new(255, 255, 255, 255)); 
+        let destination = config.destination.unwrap_or(Ipv4Addr::new(10, 0, 0, 1));
+        let netmask = config.netmask.unwrap_or(Ipv4Addr::new(255, 255, 255, 255));
 
-        device.set_address(address)?; 
-        device.set_destination(destination)?; 
+        device.set_address(address)?;
+        device.set_destination(destination)?;
         device.set_netmask(netmask)?;
 
         if let Some(ip) = config.broadcast {
@@ -250,16 +250,6 @@ impl TunDevice {
         }
 
         device.set_nonblock()?;
-
-        if config.platform_config.enable_routing {
-            let route = Route {
-                addr: address,
-                netmask,
-                dest: destination,
-            };
-
-            device.set_route(route)?;
-        }
 
         Ok(device)
     }
