@@ -96,7 +96,7 @@ impl Server {
     }
 
     pub fn read_socket(&mut self) -> Result<(SocketAddr, Message)> {
-        let mut buffer = [0; 2000];
+        let mut buffer = [0; 5000];
         let (len, from_addr) = self
             .socket
             .recv_from(&mut buffer)
