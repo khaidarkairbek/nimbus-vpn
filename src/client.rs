@@ -87,6 +87,7 @@ impl Client {
                 .send_to(&data[bytes_written..data.len()], self.server_addr)
                 .map_err(|e| SocketError::SocketSendToError(e.to_string()))?;
         }
+        println!("Written {} bytes to socket", data.len());
         Ok(())
     }
 
@@ -96,8 +97,10 @@ impl Client {
             .socket
             .recv_from(&mut buffer)
             .map_err(|e| SocketError::SocketReadError(e.to_string()))?;
+        println!("Read {} bytes to socket", len);
         let msg = serde_json::from_slice::<Message>(&buffer[..len])
             .map_err(|e| CommError::DeserialError(e.to_string()))?;
+
         Ok((from_addr, msg))
     }
 
@@ -176,6 +179,15 @@ impl Client {
                                 if len == 0 {
                                     continue;
                                 }
+
+                                if len > 1500 {
+                                    eprintln!(
+                                        "[Tun] Oversized packet received: {} bytes (max 1500)",
+                                        len
+                                    );
+                                    continue;
+                                }
+
                                 let data = &buffer[..len];
 
                                 if let Ok(key) = self.get_shared_secret_key() {

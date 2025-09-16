@@ -37,7 +37,14 @@ impl Tun {
     }
 
     pub fn generate_packet_header(&self, ipv6: bool) -> Option<[u8; 4]> {
+        #[cfg(target_os = "linux")]
+        const TUN_IPV6_HEADER: [u8; 4] = ((libc::ETH_P_IPV6) as u32).to_be_bytes();
+        #[cfg(target_os = "linux")]
+        const TUN_IPV4_HEADER: [u8; 4] = ((libc::ETH_P_IP) as u32).to_be_bytes();
+
+        #[cfg(target_os = "macos")]
         const TUN_IPV6_HEADER: [u8; 4] = ((libc::AF_INET6) as u32).to_be_bytes();
+        #[cfg(target_os = "macos")]
         const TUN_IPV4_HEADER: [u8; 4] = ((libc::AF_INET) as u32).to_be_bytes();
 
         if !self.packet_info {
@@ -86,17 +93,21 @@ impl Read for Tun {
         }
 
         let offset = self.offset();
-        let buf_len = buf.len() + offset;
-        if buf_len > self.buf.len() {
-            self.buf.resize(buf_len, 0);
+
+        let max_read_size = self.mtu as usize + offset;
+        let requested_size = buf.len() + offset;
+        let actual_read_size = requested_size.min(max_read_size);
+
+        if actual_read_size > self.buf.len() {
+            self.buf.resize(actual_read_size, 0);
         }
 
-        let amount = self.fd.read(&mut self.buf[..buf_len])?;
+        let amount = self.fd.read(&mut self.buf[..actual_read_size])?;
         if amount <= offset {
             return Ok(0);
         }
 
-        let to_copy = buf_len.min(amount.saturating_sub(offset));
+        let to_copy = buf.len().min(amount.saturating_sub(offset));
         buf[..to_copy].copy_from_slice(&self.buf[offset..offset + to_copy]);
         Ok(to_copy)
     }
