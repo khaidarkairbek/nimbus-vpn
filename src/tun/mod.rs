@@ -325,7 +325,7 @@ impl TunDevice {
                 .sum();
             let network =
                 Ipv4Addr::from(u32::from(prev_route.addr) & u32::from(prev_route.netmask));
-            if process::Command::new("route")
+            if !process::Command::new("route")
                 .arg("-n")
                 .arg("delete")
                 .arg("-net")
@@ -333,7 +333,6 @@ impl TunDevice {
                 .arg(prev_route.dest.to_string())
                 .status()?
                 .success()
-                == false
             {
                 return Err(Error::last_os_error());
             };
@@ -347,7 +346,7 @@ impl TunDevice {
             .sum();
         let network = Ipv4Addr::from(u32::from(route.addr) & u32::from(route.netmask));
 
-        if process::Command::new("route")
+        if !process::Command::new("route")
             .arg("-n")
             .arg("add")
             .arg("-net")
@@ -355,7 +354,6 @@ impl TunDevice {
             .arg(route.dest.to_string())
             .status()?
             .success()
-            == false
         {
             return Err(Error::last_os_error());
         };

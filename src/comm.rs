@@ -1,29 +1,22 @@
-use num_bigint::{BigUint};
+use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use std::str;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Message {
-    Request {
-        public_key: BigUint,
-    },
-    Response {
-        public_key: BigUint,
-    },
-    PayLoad {
-        data: Vec<u8>,
-    },
+    Request { public_key: BigUint },
+    Response { public_key: BigUint },
+    PayLoad { data: Vec<u8> },
 }
-
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
-    use std::time::Duration;
-    use std::thread;
     use crate::client::Client;
     use crate::server::Server;
     use crate::tun::config::Configuration;
+    use std::net::SocketAddr;
+    use std::thread;
+    use std::time::Duration;
 
     #[test]
     fn test_handshake() {
@@ -34,7 +27,8 @@ mod tests {
 
             for _ in 0..10 {
                 if let Ok((client_addr, msg)) = server.read_socket() {
-                    let shared_secret_key = Some(server.process_request(&client_addr, msg).unwrap());
+                    let shared_secret_key =
+                        Some(server.process_request(&client_addr, msg).unwrap());
                     return shared_secret_key;
                 }
 
@@ -45,9 +39,9 @@ mod tests {
         });
 
         let client_thread = thread::spawn(move || {
-            let mut client = Client::init(8082, server_addr, &Configuration::default()).unwrap(); 
+            let mut client = Client::init(8082, server_addr, &Configuration::default()).unwrap();
 
-            client.initiate_handshake().unwrap(); 
+            client.initiate_handshake().unwrap();
 
             for _ in 0..10 {
                 if let Ok((_, msg)) = client.read_socket() {
@@ -59,12 +53,12 @@ mod tests {
             }
 
             return None;
-        }); 
+        });
 
-        let client_shared = client_thread.join().unwrap(); 
-        let server_shared = server_thread.join().unwrap(); 
+        let client_shared = client_thread.join().unwrap();
+        let server_shared = server_thread.join().unwrap();
 
         assert!(client_shared.is_some());
-        assert_eq!(client_shared, server_shared); 
+        assert_eq!(client_shared, server_shared);
     }
 }

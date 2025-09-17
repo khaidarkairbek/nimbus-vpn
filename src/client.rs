@@ -68,10 +68,7 @@ impl Client {
     }
 
     pub fn process_response(&mut self, response_msg: Message) -> Result<BigUint> {
-        if let Message::Response {
-            public_key,
-        } = response_msg
-        {
+        if let Message::Response { public_key } = response_msg {
             let shared_secret_key = generate_shared_key(&public_key, &self.private_key);
             Ok(shared_secret_key)
         } else {
@@ -152,7 +149,10 @@ impl Client {
                             match msg {
                                 Message::Response { .. } => {
                                     let shared_secret_key = self.process_response(msg)?;
-                                    println!("[Handshake] Shared secret key: {:?}", shared_secret_key); 
+                                    println!(
+                                        "[Handshake] Shared secret key: {:?}",
+                                        shared_secret_key
+                                    );
                                     self.set_shared_secret_key(shared_secret_key);
                                 }
                                 Message::PayLoad { data } => {
@@ -160,7 +160,7 @@ impl Client {
                                     if let Ok(key) = self.get_shared_secret_key() {
                                         let decrypted_data = decrypt_data(&data, key)?;
                                         if let Err(e) = self.write_tun(&decrypted_data) {
-                                            eprintln!("[Socket] Tun write error: {}", e.to_string());
+                                            eprintln!("[Socket] Tun write error: {}", e);
                                         }
                                     } else {
                                         eprintln!(
@@ -196,13 +196,10 @@ impl Client {
                                         data: encrypt_data(data, key)?,
                                     };
                                     let serialized = serde_json::to_string::<Message>(&msg)
-                                        .map_err(|e| {
-                                            CommError::SerialError(e.to_string())
-                                        })?;
+                                        .map_err(|e| CommError::SerialError(e.to_string()))?;
 
-                                    if let Err(e) = self.write_socket(serialized.as_bytes())
-                                    {
-                                        eprintln!("[Tun] Socket write error: {}", e.to_string());
+                                    if let Err(e) = self.write_socket(serialized.as_bytes()) {
+                                        eprintln!("[Tun] Socket write error: {}", e);
                                     }
                                 } else {
                                     eprintln!(
@@ -235,10 +232,10 @@ mod tests {
         let _server_addr: SocketAddr = "127.0.0.1:8081".parse().unwrap();
         let _client_addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
         let payload = [
-            0x8, 0x9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
-            0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24,
-            0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32,
-            0x33, 0x34, 0x35, 0x36, 0x37,
+            0x8, 0x9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+            0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25,
+            0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33,
+            0x34, 0x35, 0x36, 0x37,
         ];
 
         let client_ip: Ipv4Addr = "10.0.0.3".parse().unwrap();
@@ -247,39 +244,40 @@ mod tests {
 
         let server_thread = thread::spawn(move || {
             let mut server = Server::init(8081, &Configuration::default()).unwrap();
-            let mut connection_established = false; 
+            let mut connection_established = false;
 
             for _ in 0..10 {
                 if let Ok((client_addr, msg)) = server.read_socket() {
-                    assert_eq!(client_addr, _client_addr); 
+                    assert_eq!(client_addr, _client_addr);
 
-                    let shared_secret_key =
-                        server.process_request(&client_addr, msg).unwrap();
+                    let shared_secret_key = server.process_request(&client_addr, msg).unwrap();
                     server
                         .set_shared_secret_key(shared_secret_key, client_addr)
                         .unwrap();
 
-                    connection_established = true; 
+                    connection_established = true;
                     break;
                 }
 
                 thread::sleep(Duration::from_millis(10));
             }
 
-            assert!(connection_established); 
+            assert!(connection_established);
 
             for _ in 0..10 {
                 if let Ok((client_addr, msg)) = server.read_socket() {
                     assert_eq!(client_addr, _client_addr);
                     match msg {
                         Message::PayLoad { data } => {
-                            let (client_addr, shared_key) =
-                                server.get_shared_secret_key().unwrap();
+                            let (client_addr, shared_key) = server.get_shared_secret_key().unwrap();
 
                             let decrypted_data = decrypt_data(&data, shared_key).unwrap();
-                            assert_eq!(*client_addr, _client_addr); 
-                            assert!(decrypted_data.len() > payload.len()); 
-                            assert_eq!(decrypted_data[decrypted_data.len() - payload.len()..], payload);
+                            assert_eq!(*client_addr, _client_addr);
+                            assert!(decrypted_data.len() > payload.len());
+                            assert_eq!(
+                                decrypted_data[decrypted_data.len() - payload.len()..],
+                                payload
+                            );
                             break;
                         }
                         _ => panic!(),

@@ -1,4 +1,9 @@
-use std::{io::{Read, Write}, net::SocketAddr, os::fd::AsRawFd, process};
+use std::{
+    io::{Read, Write},
+    net::SocketAddr,
+    os::fd::AsRawFd,
+    process,
+};
 
 use anyhow::{bail, Result};
 use mio::{net::UdpSocket, unix::SourceFd, Events, Interest, Poll, Token};
@@ -42,18 +47,18 @@ impl Server {
         new_key: BigUint,
         client_addr: SocketAddr,
     ) -> Result<()> {
-        if let None = self.client {
-            self.client = Some((client_addr, new_key)); 
+        if self.client.is_none() {
+            self.client = Some((client_addr, new_key));
             Ok(())
         } else {
             bail!(ServerError::ClientInfoSetError)
         }
     }
 
-    pub fn get_shared_secret_key(&self,) -> Result<(&SocketAddr, &BigUint)> {
+    pub fn get_shared_secret_key(&self) -> Result<(&SocketAddr, &BigUint)> {
         match &self.client {
-            None => bail!(ServerError::ClientInfoGetError), 
-            Some((addr, key)) => Ok((addr, key))
+            None => bail!(ServerError::ClientInfoGetError),
+            Some((addr, key)) => Ok((addr, key)),
         }
     }
 
@@ -62,20 +67,20 @@ impl Server {
         client_addr: &SocketAddr,
         request_msg: Message,
     ) -> Result<BigUint> {
-        if let Message::Request { public_key: client_public_key } = request_msg {
+        if let Message::Request {
+            public_key: client_public_key,
+        } = request_msg
+        {
             let public_key = generate_public_key(&self.private_key);
-            let response_msg = Message::Response {
-                public_key,
-            };
+            let response_msg = Message::Response { public_key };
             let serialized = serde_json::to_string::<Message>(&response_msg)
                 .map_err(|e| CommError::SerialError(e.to_string()))?;
 
             self.socket
-                .send_to(serialized.as_bytes(), client_addr.clone())
+                .send_to(serialized.as_bytes(), *client_addr)
                 .map_err(|e| SocketError::SocketSendToError(e.to_string()))?;
 
-            let shared_secret_key =
-                generate_shared_key(&client_public_key, &self.private_key);
+            let shared_secret_key = generate_shared_key(&client_public_key, &self.private_key);
 
             Ok(shared_secret_key)
         } else {
@@ -173,20 +178,16 @@ impl Server {
                         Ok((client_addr, msg)) => match msg {
                             Message::Request { .. } => {
                                 let shared_secret_key = self.process_request(&client_addr, msg)?;
-                                println!("[Handshake] Shared secret key: {:?}", shared_secret_key); 
-                                self.set_shared_secret_key(
-                                    shared_secret_key,
-                                    client_addr,
-                                )?;
+                                println!("[Handshake] Shared secret key: {:?}", shared_secret_key);
+                                self.set_shared_secret_key(shared_secret_key, client_addr)?;
                             }
                             Message::PayLoad { data } => {
                                 let shared_secret = self.get_shared_secret_key();
                                 println!("[Socket] Payload received");
-                                if let Ok((_, key)) = shared_secret
-                                {
+                                if let Ok((_, key)) = shared_secret {
                                     let decrypted_data = decrypt_data(&data, key)?;
                                     if let Err(e) = self.write_tun(&decrypted_data) {
-                                        eprintln!("[Socket] Tun write error: {}", e.to_string());
+                                        eprintln!("[Socket] Tun write error: {}", e);
                                     }
                                 } else {
                                     eprintln!(
@@ -202,7 +203,7 @@ impl Server {
                         match self.read_tun(&mut buffer) {
                             Ok(len) => {
                                 if len == 0 {
-                                    continue; 
+                                    continue;
                                 }
 
                                 if len > 1500 {
@@ -215,8 +216,7 @@ impl Server {
 
                                 let data = &buffer[..len];
 
-                                if let Ok((client_addr, key)) = self.get_shared_secret_key()
-                                {
+                                if let Ok((client_addr, key)) = self.get_shared_secret_key() {
                                     println!("[Tun] Payload received");
                                     let encrypted_data = encrypt_data(data, key)?;
                                     let msg = Message::PayLoad {
@@ -224,8 +224,10 @@ impl Server {
                                     };
                                     let serialized = serde_json::to_string::<Message>(&msg)
                                         .map_err(|e| CommError::SerialError(e.to_string()))?;
-                                    if let Err(e) = self.write_socket(serialized.as_bytes(), client_addr) {
-                                        eprintln!("[Tun] Socket write error: {}", e.to_string());
+                                    if let Err(e) =
+                                        self.write_socket(serialized.as_bytes(), client_addr)
+                                    {
+                                        eprintln!("[Tun] Socket write error: {}", e);
                                     }
                                 } else {
                                     eprintln!(

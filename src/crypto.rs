@@ -7,8 +7,8 @@ use num_bigint::BigUint;
 use crate::error::CryptoError::*;
 
 // Diffie Hellman Key Exchange implementation
-const DH_MODULUS: &'static str = "23"; // Placeholder values for testing
-const DH_BASE: &'static str = "5";
+const DH_MODULUS: &str = "23"; // Placeholder values for testing
+const DH_BASE: &str = "5";
 
 pub fn generate_public_key(private_key: &BigUint) -> BigUint {
     let p: BigUint = DH_MODULUS.parse().unwrap(); //parse the modulus
