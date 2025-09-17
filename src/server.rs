@@ -98,7 +98,7 @@ impl Server {
                 .send_to(&data[bytes_written..data.len()], *client_addr)
                 .map_err(|e| SocketError::SocketSendToError(e.to_string()))?;
         }
-        log::trace!("[Socket] Written {} bytes", data.len()); 
+        log::trace!("[Socket] Written {} bytes", data.len());
         Ok(())
     }
 
@@ -108,7 +108,7 @@ impl Server {
             .socket
             .recv_from(&mut buffer)
             .map_err(|e| SocketError::SocketReadError(e.to_string()))?;
-        log::trace!("[Socket] Read {} bytes", len); 
+        log::trace!("[Socket] Read {} bytes", len);
         let msg = serde_json::from_slice::<Message>(&buffer[..len])
             .map_err(|e| CommError::DeserialError(e.to_string()))?;
         Ok((from_addr, msg))
@@ -121,7 +121,7 @@ impl Server {
             bytes_written += self.tun.write(&data[bytes_written..data.len()])?;
         }
 
-        log::trace!("[Tun] Written {} bytes", bytes_written); 
+        log::trace!("[Tun] Written {} bytes", bytes_written);
 
         Ok(())
     }
@@ -129,7 +129,7 @@ impl Server {
     fn read_tun(&mut self, buffer: &mut [u8]) -> Result<usize> {
         let len = self.tun.read(buffer)?;
 
-        log::trace!("[Tun] Read {} bytes", len); 
+        log::trace!("[Tun] Read {} bytes", len);
 
         Ok(len)
     }
@@ -180,35 +180,77 @@ impl Server {
             poll.poll(&mut events, None)
                 .map_err(|_| CommError::MioPollingError)?;
             for event in &events {
+                let start_time = std::time::Instant::now();
                 match event.token() {
-                    Token(0) => match self.read_socket() {
-                        Ok((client_addr, msg)) => match msg {
-                            Message::Request { .. } => {
-                                let shared_secret_key = self.process_request(&client_addr, msg)?;
-                                log::debug!("[Handshake] Shared secret key: {:?}", shared_secret_key);
-                                self.set_shared_secret_key(shared_secret_key, client_addr)?;
-                            }
-                            Message::PayLoad { data } => {
-                                let shared_secret = self.get_shared_secret_key();
-                                log::trace!("[Socket] Payload received");
-                                if let Ok((_, key)) = shared_secret {
-                                    let decrypted_data = decrypt_data(&data, key)?;
-                                    if let Err(e) = self.write_tun(&decrypted_data) {
-                                        log::error!("[Socket] Tun write error: {}", e);
+                    Token(0) => {
+                        let socket_start = std::time::Instant::now();
+                        match self.read_socket() {
+                            Ok((client_addr, msg)) => {
+                                let socket_read_time = socket_start.elapsed();
+                                log::trace!("[Socket] Read took {:?}", socket_read_time);
+
+                                match msg {
+                                    Message::Request { .. } => {
+                                        let handshake_start = std::time::Instant::now();
+                                        let shared_secret_key =
+                                            self.process_request(&client_addr, msg)?;
+                                        log::debug!(
+                                            "[Handshake] Shared secret key: {:?}",
+                                            shared_secret_key
+                                        );
+                                        self.set_shared_secret_key(shared_secret_key, client_addr)?;
+                                        log::trace!(
+                                            "[Handshake] Processing took {:?}",
+                                            handshake_start.elapsed()
+                                        );
                                     }
-                                } else {
-                                    log::error!(
-                                        "[Socket] Connection not yet set between client and server"
-                                    )
+                                    Message::PayLoad { data } => {
+                                        let payload_start = std::time::Instant::now();
+                                        let shared_secret = self.get_shared_secret_key();
+                                        log::trace!("[Socket] Payload received");
+                                        if let Ok((_, key)) = shared_secret {
+                                            let decrypt_start = std::time::Instant::now();
+                                            let decrypted_data = decrypt_data(&data, key)?;
+                                            log::trace!(
+                                                "[Crypto] Decrypt took {:?}",
+                                                decrypt_start.elapsed()
+                                            );
+
+                                            let tun_write_start = std::time::Instant::now();
+                                            if let Err(e) = self.write_tun(&decrypted_data) {
+                                                log::error!("[Socket] Tun write error: {}", e);
+                                            }
+                                            log::trace!(
+                                                "[Tun] Write took {:?}",
+                                                tun_write_start.elapsed()
+                                            );
+                                        } else {
+                                            log::error!(
+                                                "[Socket] Connection not yet set between client and server"
+                                            )
+                                        }
+                                        log::trace!(
+                                            "[Socket] Payload processing took {:?}",
+                                            payload_start.elapsed()
+                                        );
+                                    }
+                                    _ => (),
                                 }
                             }
-                            _ => (),
-                        },
-                        Err(e) => log::error!("[Socket] The read error: {}", e),
-                    },
+                            Err(e) => log::error!("[Socket] The read error: {}", e),
+                        }
+                        log::trace!(
+                            "[Socket] Total socket event took {:?}",
+                            start_time.elapsed()
+                        );
+                    }
                     Token(1) => {
+                        let tun_start = std::time::Instant::now();
                         match self.read_tun(&mut buffer) {
                             Ok(len) => {
+                                let tun_read_time = tun_start.elapsed();
+                                log::trace!("[Tun] Read took {:?}", tun_read_time);
+
                                 if len == 0 {
                                     continue;
                                 }
@@ -225,17 +267,35 @@ impl Server {
 
                                 if let Ok((client_addr, key)) = self.get_shared_secret_key() {
                                     log::trace!("[Tun] Payload received");
+
+                                    let encrypt_start = std::time::Instant::now();
                                     let encrypted_data = encrypt_data(data, key)?;
+                                    log::trace!(
+                                        "[Crypto] Encrypt took {:?}",
+                                        encrypt_start.elapsed()
+                                    );
+
+                                    let serialize_start = std::time::Instant::now();
                                     let msg = Message::PayLoad {
                                         data: encrypted_data,
                                     };
                                     let serialized = serde_json::to_string::<Message>(&msg)
                                         .map_err(|e| CommError::SerialError(e.to_string()))?;
+                                    log::trace!(
+                                        "[Serialize] JSON took {:?}",
+                                        serialize_start.elapsed()
+                                    );
+
+                                    let socket_write_start = std::time::Instant::now();
                                     if let Err(e) =
                                         self.write_socket(serialized.as_bytes(), client_addr)
                                     {
                                         log::error!("[Tun] Socket write error: {}", e);
                                     }
+                                    log::trace!(
+                                        "[Socket] Write took {:?}",
+                                        socket_write_start.elapsed()
+                                    );
                                 } else {
                                     log::error!(
                                         "[Tun] Connection not yet set between client and server"
@@ -243,7 +303,8 @@ impl Server {
                                 }
                             }
                             Err(e) => log::error!("[Tun] The read error: {}", e),
-                        };
+                        }
+                        log::trace!("[Tun] Total tun event took {:?}", start_time.elapsed());
                     }
                     _ => (),
                 }
