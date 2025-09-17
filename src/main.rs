@@ -12,6 +12,7 @@ mod tun;
 
 fn main() {
     let args = cli::Cli::parse();
+    env_logger::init(); 
 
     match args.mode {
         Mode::Client {

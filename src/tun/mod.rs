@@ -369,12 +369,14 @@ impl TunDevice {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn tun_index(&self) -> Result<i32> {
         let cstr = std::ffi::CString::new(self.tun_name.clone())?;
         let index = unsafe { libc::if_nametoindex(cstr.as_ptr()) };
         Ok(index as i32)
     }
 
+    #[allow(dead_code)]
     pub fn tun_name(&self) -> String {
         self.tun_name.clone()
     }
@@ -404,6 +406,7 @@ impl TunDevice {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn address(&self) -> Result<Ipv4Addr> {
         let ctl = &self.ctl_fd;
         unsafe {
@@ -461,6 +464,7 @@ impl TunDevice {
         }
     }
 
+    #[allow(dead_code)]
     pub fn destination(&self) -> Result<Ipv4Addr> {
         let ctl = &self.ctl_fd;
 
@@ -519,6 +523,7 @@ impl TunDevice {
         }
     }
 
+    #[allow(dead_code)]
     pub fn broadcast(&self) -> Result<Ipv4Addr> {
         let ctl = &self.ctl_fd;
 
@@ -572,6 +577,7 @@ impl TunDevice {
         }
     }
 
+    #[allow(dead_code)]
     pub fn netmask(&self) -> Result<Ipv4Addr> {
         let ctl = &self.ctl_fd;
 
@@ -630,6 +636,7 @@ impl TunDevice {
         }
     }
 
+    #[allow(dead_code)]
     pub fn mtu(&self) -> Result<u16> {
         let ctl = &self.ctl_fd;
 
@@ -670,6 +677,7 @@ impl TunDevice {
         }
     }
 
+    #[allow(dead_code)]
     pub fn packet_information(&self) -> bool {
         self.tun.packet_info
     }

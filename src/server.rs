@@ -39,6 +39,8 @@ impl Server {
             private_key,
         };
 
+        log::info!("Server succesfully initialized.");
+
         Ok(server)
     }
 
@@ -96,7 +98,7 @@ impl Server {
                 .send_to(&data[bytes_written..data.len()], *client_addr)
                 .map_err(|e| SocketError::SocketSendToError(e.to_string()))?;
         }
-        println!("Written {} bytes to socket", data.len());
+        log::trace!("[Socket] Written {} bytes", data.len()); 
         Ok(())
     }
 
@@ -106,7 +108,7 @@ impl Server {
             .socket
             .recv_from(&mut buffer)
             .map_err(|e| SocketError::SocketReadError(e.to_string()))?;
-        println!("Read {} bytes to socket", len);
+        log::trace!("[Socket] Read {} bytes", len); 
         let msg = serde_json::from_slice::<Message>(&buffer[..len])
             .map_err(|e| CommError::DeserialError(e.to_string()))?;
         Ok((from_addr, msg))
@@ -119,11 +121,16 @@ impl Server {
             bytes_written += self.tun.write(&data[bytes_written..data.len()])?;
         }
 
+        log::trace!("[Tun] Written {} bytes", bytes_written); 
+
         Ok(())
     }
 
     fn read_tun(&mut self, buffer: &mut [u8]) -> Result<usize> {
         let len = self.tun.read(buffer)?;
+
+        log::trace!("[Tun] Read {} bytes", len); 
+
         Ok(len)
     }
 
@@ -178,26 +185,26 @@ impl Server {
                         Ok((client_addr, msg)) => match msg {
                             Message::Request { .. } => {
                                 let shared_secret_key = self.process_request(&client_addr, msg)?;
-                                println!("[Handshake] Shared secret key: {:?}", shared_secret_key);
+                                log::debug!("[Handshake] Shared secret key: {:?}", shared_secret_key);
                                 self.set_shared_secret_key(shared_secret_key, client_addr)?;
                             }
                             Message::PayLoad { data } => {
                                 let shared_secret = self.get_shared_secret_key();
-                                println!("[Socket] Payload received");
+                                log::trace!("[Socket] Payload received");
                                 if let Ok((_, key)) = shared_secret {
                                     let decrypted_data = decrypt_data(&data, key)?;
                                     if let Err(e) = self.write_tun(&decrypted_data) {
-                                        eprintln!("[Socket] Tun write error: {}", e);
+                                        log::error!("[Socket] Tun write error: {}", e);
                                     }
                                 } else {
-                                    eprintln!(
+                                    log::error!(
                                         "[Socket] Connection not yet set between client and server"
                                     )
                                 }
                             }
                             _ => (),
                         },
-                        Err(e) => eprintln!("[Socket] The read error: {}", e),
+                        Err(e) => log::error!("[Socket] The read error: {}", e),
                     },
                     Token(1) => {
                         match self.read_tun(&mut buffer) {
@@ -207,7 +214,7 @@ impl Server {
                                 }
 
                                 if len > 1500 {
-                                    eprintln!(
+                                    log::warn!(
                                         "[Tun] Oversized packet received: {} bytes (max 1500)",
                                         len
                                     );
@@ -217,7 +224,7 @@ impl Server {
                                 let data = &buffer[..len];
 
                                 if let Ok((client_addr, key)) = self.get_shared_secret_key() {
-                                    println!("[Tun] Payload received");
+                                    log::trace!("[Tun] Payload received");
                                     let encrypted_data = encrypt_data(data, key)?;
                                     let msg = Message::PayLoad {
                                         data: encrypted_data,
@@ -227,15 +234,15 @@ impl Server {
                                     if let Err(e) =
                                         self.write_socket(serialized.as_bytes(), client_addr)
                                     {
-                                        eprintln!("[Tun] Socket write error: {}", e);
+                                        log::error!("[Tun] Socket write error: {}", e);
                                     }
                                 } else {
-                                    eprintln!(
+                                    log::error!(
                                         "[Tun] Connection not yet set between client and server"
                                     )
                                 }
                             }
-                            Err(e) => eprintln!("[Tun] The read error: {}", e),
+                            Err(e) => log::error!("[Tun] The read error: {}", e),
                         };
                     }
                     _ => (),
