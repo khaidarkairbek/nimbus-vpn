@@ -1,3 +1,4 @@
+use anyhow::Result;
 use clap::Parser;
 
 use crate::{cli::Mode, client::Client, server::Server, tun::config::Configuration};
@@ -10,9 +11,9 @@ mod error;
 mod server;
 mod tun;
 
-fn main() {
+fn main() -> Result<()> {
     let args = cli::Cli::parse();
-    env_logger::init(); 
+    env_logger::init();
 
     match args.mode {
         Mode::Client {
@@ -20,14 +21,15 @@ fn main() {
             port,
             local_port,
         } => {
-            let server_addr = format!("{address}:{port}").parse().unwrap();
-            let mut client =
-                Client::init(local_port, server_addr, &Configuration::default()).unwrap();
-            client.start().unwrap();
+            let server_addr = format!("{address}:{port}")
+                .parse()
+                .map_err(|e| anyhow::anyhow!("Invalid server address '{address}:{port}': {e}"))?;
+            Client::init(local_port, server_addr, &Configuration::default())?.start()?;
         }
         Mode::Server { port } => {
-            let mut server = Server::init(port, &Configuration::default()).unwrap();
-            server.start().unwrap();
+            Server::init(port, &Configuration::default())?.start()?;
         }
     }
+
+    Ok(())
 }

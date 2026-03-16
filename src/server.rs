@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     io::{Read, Write},
     net::SocketAddr,
     os::fd::AsRawFd,
@@ -13,13 +14,13 @@ use rand::thread_rng;
 use crate::{
     comm::Message,
     crypto::{decrypt_data, encrypt_data, generate_public_key, generate_shared_key},
-    error::{CommError, LogicError, ServerError, SocketError},
+    error::{CommError, LogicError, SocketError},
     tun::{config::Configuration, TunDevice},
 };
 
 pub struct Server {
     socket: UdpSocket,
-    client: Option<(SocketAddr, BigUint)>,
+    clients: HashMap<SocketAddr, BigUint>,
     tun: TunDevice,
     private_key: BigUint,
 }
@@ -34,12 +35,12 @@ impl Server {
 
         let server = Server {
             socket,
-            client: None,
+            clients: HashMap::new(),
             tun: TunDevice::new(tun_config)?,
             private_key,
         };
 
-        log::info!("Server succesfully initialized.");
+        log::info!("Server successfully initialized.");
 
         Ok(server)
     }
@@ -49,19 +50,13 @@ impl Server {
         new_key: BigUint,
         client_addr: SocketAddr,
     ) -> Result<()> {
-        if self.client.is_none() {
-            self.client = Some((client_addr, new_key));
-            Ok(())
-        } else {
-            bail!(ServerError::ClientInfoSetError)
-        }
+        self.clients.insert(client_addr, new_key);
+        Ok(())
     }
 
-    pub fn get_shared_secret_key(&self) -> Result<(&SocketAddr, &BigUint)> {
-        match &self.client {
-            None => bail!(ServerError::ClientInfoGetError),
-            Some((addr, key)) => Ok((addr, key)),
-        }
+    #[cfg(test)]
+    pub fn get_client_key(&self, addr: &SocketAddr) -> Option<&BigUint> {
+        self.clients.get(addr)
     }
 
     pub fn process_request(
@@ -114,7 +109,7 @@ impl Server {
         Ok((from_addr, msg))
     }
 
-    fn write_tun(&mut self, data: &Vec<u8>) -> Result<()> {
+    fn write_tun(&mut self, data: &[u8]) -> Result<()> {
         let mut bytes_written = 0;
 
         while bytes_written < data.len() {
@@ -142,16 +137,21 @@ impl Server {
                 .arg("net.inet.ip.forwarding=1")
                 .status()?;
 
-            assert!(status.success());
+            if !status.success() {
+                bail!("sysctl failed to enable IP forwarding on macOS (exit code: {:?})", status.code());
+            }
         } else if cfg!(target_os = "linux") {
             // Linux: sysctl -w net.ipv4.ip_forward=1
             let status = process::Command::new("sysctl")
                 .arg("-w")
                 .arg("net.ipv4.ip_forward=1")
                 .status()?;
-            assert!(status.success());
+
+            if !status.success() {
+                bail!("sysctl failed to enable IP forwarding on Linux (exit code: {:?})", status.code());
+            }
         } else {
-            unimplemented!()
+            bail!("IP forwarding is not supported on this platform");
         }
         Ok(())
     }
@@ -206,11 +206,12 @@ impl Server {
                                     }
                                     Message::PayLoad { data } => {
                                         let payload_start = std::time::Instant::now();
-                                        let shared_secret = self.get_shared_secret_key();
                                         log::trace!("[Socket] Payload received");
-                                        if let Ok((_, key)) = shared_secret {
+
+                                        let key = self.clients.get(&client_addr).cloned();
+                                        if let Some(key) = key {
                                             let decrypt_start = std::time::Instant::now();
-                                            let decrypted_data = decrypt_data(&data, key)?;
+                                            let decrypted_data = decrypt_data(&data, &key)?;
                                             log::trace!(
                                                 "[Crypto] Decrypt took {:?}",
                                                 decrypt_start.elapsed()
@@ -225,9 +226,10 @@ impl Server {
                                                 tun_write_start.elapsed()
                                             );
                                         } else {
-                                            log::error!(
-                                                "[Socket] Connection not yet set between client and server"
-                                            )
+                                            log::warn!(
+                                                "[Socket] Payload from unregistered client: {}",
+                                                client_addr
+                                            );
                                         }
                                         log::trace!(
                                             "[Socket] Payload processing took {:?}",
@@ -265,11 +267,31 @@ impl Server {
 
                                 let data = &buffer[..len];
 
-                                if let Ok((client_addr, key)) = self.get_shared_secret_key() {
-                                    log::trace!("[Tun] Payload received");
+                                let clients: Vec<(SocketAddr, BigUint)> = self
+                                    .clients
+                                    .iter()
+                                    .map(|(&addr, key)| (addr, key.clone()))
+                                    .collect();
+
+                                if clients.is_empty() {
+                                    log::warn!("[Tun] No connected clients to forward packet to");
+                                }
+
+                                for (client_addr, key) in &clients {
+                                    log::trace!("[Tun] Forwarding packet to {}", client_addr);
 
                                     let encrypt_start = std::time::Instant::now();
-                                    let encrypted_data = encrypt_data(data, key)?;
+                                    let encrypted_data = match encrypt_data(data, key) {
+                                        Ok(d) => d,
+                                        Err(e) => {
+                                            log::error!(
+                                                "[Crypto] Encrypt error for {}: {}",
+                                                client_addr,
+                                                e
+                                            );
+                                            continue;
+                                        }
+                                    };
                                     log::trace!(
                                         "[Crypto] Encrypt took {:?}",
                                         encrypt_start.elapsed()
@@ -279,8 +301,17 @@ impl Server {
                                     let msg = Message::PayLoad {
                                         data: encrypted_data,
                                     };
-                                    let serialized = serde_json::to_string::<Message>(&msg)
-                                        .map_err(|e| CommError::SerialError(e.to_string()))?;
+                                    let serialized = match serde_json::to_string::<Message>(&msg) {
+                                        Ok(s) => s,
+                                        Err(e) => {
+                                            log::error!(
+                                                "[Serialize] Error for {}: {}",
+                                                client_addr,
+                                                e
+                                            );
+                                            continue;
+                                        }
+                                    };
                                     log::trace!(
                                         "[Serialize] JSON took {:?}",
                                         serialize_start.elapsed()
@@ -290,16 +321,16 @@ impl Server {
                                     if let Err(e) =
                                         self.write_socket(serialized.as_bytes(), client_addr)
                                     {
-                                        log::error!("[Tun] Socket write error: {}", e);
+                                        log::error!(
+                                            "[Tun] Socket write error for {}: {}",
+                                            client_addr,
+                                            e
+                                        );
                                     }
                                     log::trace!(
                                         "[Socket] Write took {:?}",
                                         socket_write_start.elapsed()
                                     );
-                                } else {
-                                    log::error!(
-                                        "[Tun] Connection not yet set between client and server"
-                                    )
                                 }
                             }
                             Err(e) => log::error!("[Tun] The read error: {}", e),

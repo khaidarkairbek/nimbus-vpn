@@ -37,8 +37,7 @@ impl Client {
             shared_secret_key: None,
             private_key,
         };
-
-        log::info!("Client succesfully initialized");
+        log::info!("Client successfully initialized");
         Ok(client)
     }
     pub fn set_shared_secret_key(&mut self, new_key: BigUint) {
@@ -102,7 +101,7 @@ impl Client {
         Ok((from_addr, msg))
     }
 
-    pub fn write_tun(&mut self, data: &Vec<u8>) -> Result<()> {
+    pub fn write_tun(&mut self, data: &[u8]) -> Result<()> {
         let mut bytes_written = 0;
         while bytes_written < data.len() {
             bytes_written += self.tun.write(&data[bytes_written..data.len()])?;
@@ -327,10 +326,9 @@ mod tests {
                     assert_eq!(client_addr, _client_addr);
                     match msg {
                         Message::PayLoad { data } => {
-                            let (client_addr, shared_key) = server.get_shared_secret_key().unwrap();
+                            let shared_key = server.get_client_key(&_client_addr).unwrap();
 
                             let decrypted_data = decrypt_data(&data, shared_key).unwrap();
-                            assert_eq!(*client_addr, _client_addr);
                             assert!(decrypted_data.len() > payload.len());
                             assert_eq!(
                                 decrypted_data[decrypted_data.len() - payload.len()..],
