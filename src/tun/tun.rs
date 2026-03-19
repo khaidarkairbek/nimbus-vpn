@@ -65,9 +65,7 @@ impl Tun {
     pub fn set_mtu(&mut self, value: u16) {
         self.mtu = value;
         let new_size = value as usize + self.offset();
-        if new_size > self.buf.len() {
-            self.buf.resize(new_size, 0);
-        }
+        self.buf.resize(new_size, 0);
     }
 }
 
