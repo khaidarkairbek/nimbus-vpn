@@ -1,6 +1,6 @@
 use std::{
     io::{Read, Write},
-    os::fd::{AsRawFd, IntoRawFd, RawFd},
+    os::fd::{AsRawFd, RawFd},
 };
 
 use std::io::{Error, ErrorKind, Result};
@@ -152,12 +152,6 @@ impl Write for Tun {
 impl AsRawFd for Tun {
     fn as_raw_fd(&self) -> RawFd {
         self.fd.as_raw_fd()
-    }
-}
-
-impl IntoRawFd for Tun {
-    fn into_raw_fd(self) -> RawFd {
-        self.fd.into_raw_fd()
     }
 }
 

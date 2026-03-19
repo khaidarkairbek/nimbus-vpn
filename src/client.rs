@@ -296,8 +296,8 @@ mod tests {
             0x34, 0x35, 0x36, 0x37,
         ];
 
-        let client_ip: Ipv4Addr = "10.0.0.3".parse().unwrap();
-        let destination_ip: Ipv4Addr = "142.250.31.100".parse().unwrap();
+        let client_ip: Ipv4Addr = "10.0.0.5".parse().unwrap();
+        let destination_ip: Ipv4Addr = "10.0.0.6".parse().unwrap();
         let netmask: Ipv4Addr = "255.255.255.255".parse().unwrap();
 
         let server_thread = thread::spawn(move || {

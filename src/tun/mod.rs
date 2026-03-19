@@ -1,6 +1,6 @@
 use std::io::{Error, ErrorKind, Read, Result, Write};
 use std::net::Ipv4Addr;
-use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
+use std::os::fd::{AsRawFd, RawFd};
 use std::{mem, process};
 
 use crate::tun::config::{Configuration, DEFAULT_MTU};
@@ -255,6 +255,15 @@ impl TunDevice {
 
         device.set_nonblock()?;
 
+        if config.platform_config.enable_routing {
+            let route = Route {
+                addr: address,
+                netmask,
+                dest: destination,
+            };
+            device.set_route(route)?;
+        }
+
         Ok(device)
     }
 
@@ -320,51 +329,52 @@ impl TunDevice {
     }
 
     fn set_route(&mut self, route: Route) -> Result<()> {
+        let tun_name = self.tun_name.clone();
+
+        // Delete any previously installed route
         if let Some(prev_route) = &self.route {
-            let prefix_len: u8 = prev_route
-                .netmask
-                .octets()
-                .map(|o| o.count_ones() as u8)
-                .iter()
-                .sum();
-            let network =
-                Ipv4Addr::from(u32::from(prev_route.addr) & u32::from(prev_route.netmask));
-            if !process::Command::new("route")
-                .arg("-n")
-                .arg("delete")
-                .arg("-net")
-                .arg(format!("{}/{}", network, prefix_len))
-                .arg(prev_route.dest.to_string())
-                .status()?
-                .success()
-            {
-                return Err(Error::new(ErrorKind::Other, "route command failed"));
-            };
+            let _ = Self::route_cmd_delete(&prev_route.dest.to_string());
         }
 
-        let prefix_len: u8 = route
-            .netmask
-            .octets()
-            .map(|o| o.count_ones() as u8)
-            .iter()
-            .sum();
-        let network = Ipv4Addr::from(u32::from(route.addr) & u32::from(route.netmask));
+        // Pre-delete the new destination
+        let _ = Self::route_cmd_delete(&route.dest.to_string());
 
-        if !process::Command::new("route")
-            .arg("-n")
-            .arg("add")
-            .arg("-net")
-            .arg(format!("{}/{}", network, prefix_len))
-            .arg(route.dest.to_string())
-            .status()?
-            .success()
-        {
+        // Add route: traffic destined for peer exits through the TUN interface
+        if !Self::route_cmd_add(&route.dest.to_string(), &tun_name)?.success() {
             return Err(Error::new(ErrorKind::Other, "route command failed"));
-        };
+        }
 
         self.route = Some(route);
 
         Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn route_cmd_delete(dest: &str) -> Result<process::ExitStatus> {
+        process::Command::new("route")
+            .args(["-n", "delete", "-host", dest])
+            .status()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn route_cmd_delete(dest: &str) -> Result<process::ExitStatus> {
+        process::Command::new("ip")
+            .args(["route", "del", &format!("{}/32", dest)])
+            .status()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn route_cmd_add(dest: &str, iface: &str) -> Result<process::ExitStatus> {
+        process::Command::new("route")
+            .args(["-n", "add", "-host", dest, "-interface", iface])
+            .status()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn route_cmd_add(dest: &str, iface: &str) -> Result<process::ExitStatus> {
+        process::Command::new("ip")
+            .args(["route", "add", &format!("{}/32", dest), "dev", iface])
+            .status()
     }
 
     pub fn set_nonblock(&self) -> Result<()> {
@@ -712,6 +722,14 @@ impl TunDevice {
     }
 }
 
+impl Drop for TunDevice {
+    fn drop(&mut self) {
+        if let Some(route) = &self.route {
+            let _ = Self::route_cmd_delete(&route.dest.to_string());
+        }
+    }
+}
+
 impl Read for TunDevice {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         if !self.is_enabled_ {
@@ -737,12 +755,6 @@ impl Write for TunDevice {
 impl AsRawFd for TunDevice {
     fn as_raw_fd(&self) -> RawFd {
         self.tun.as_raw_fd()
-    }
-}
-
-impl IntoRawFd for TunDevice {
-    fn into_raw_fd(self) -> RawFd {
-        self.tun.into_raw_fd()
     }
 }
 
@@ -896,7 +908,7 @@ mod tests {
     fn test_dev_packet_capture() {
         let client_ip: Ipv4Addr = "10.0.0.3".parse().unwrap();
         let destination_ip: Ipv4Addr = "142.250.31.100".parse().unwrap();
-        let netmask: Ipv4Addr = "255.255.255.0".parse().unwrap();
+        let netmask: Ipv4Addr = "255.255.255.255".parse().unwrap();
 
         let mut client_config = Configuration::default();
         client_config.destination = Some(destination_ip);
