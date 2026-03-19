@@ -1,7 +1,7 @@
 use std::io::{Error, ErrorKind, Result};
 use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Fd {
     pub raw: RawFd,
     close_fd_on_drop: bool,
