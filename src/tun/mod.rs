@@ -17,6 +17,7 @@ pub struct TunDevice {
     tun: Tun,
     ctl_fd: Fd,
     route: Option<Route>,
+    is_enabled_: bool
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,7 +72,7 @@ impl TunDevice {
             libc::strncpy(
                 ctl_info.ctl_name.as_mut_ptr() as *mut libc::c_char,
                 ctl_name.as_ptr(),
-                96,
+                libc::MAX_KCTL_NAME,
             );
 
             if libc::ioctl(tun.as_raw_fd(), libc::CTLIOCGINFO, &mut ctl_info) == -1 {
@@ -97,13 +98,14 @@ impl TunDevice {
             }
 
             let mut tun_name = [0u8; 64];
+            let mut len: libc::socklen_t = tun_name.len() as libc::socklen_t; 
 
             if libc::getsockopt(
                 tun.as_raw_fd(),
                 PROTOCOL,
                 libc::UTUN_OPT_IFNAME,
                 &mut tun_name as *mut _ as *mut libc::c_void,
-                &mut 64,
+                &mut len,
             ) == -1
             {
                 return Err(Error::last_os_error());
@@ -126,6 +128,7 @@ impl TunDevice {
                 tun: Tun::new(tun, mtu, config.platform_config.packet_information),
                 route: None,
                 ctl_fd,
+                is_enabled_: false
             }
         };
 
@@ -222,6 +225,7 @@ impl TunDevice {
                 tun: Tun::new(tun_fd, mtu, config.platform_config.packet_information),
                 route: None,
                 ctl_fd,
+                is_enabled_: false
             }
         };
 
@@ -334,7 +338,7 @@ impl TunDevice {
                 .status()?
                 .success()
             {
-                return Err(Error::last_os_error());
+                return Err(Error::new(ErrorKind::Other, "route command failed"));
             };
         }
 
@@ -355,7 +359,7 @@ impl TunDevice {
             .status()?
             .success()
         {
-            return Err(Error::last_os_error());
+            return Err(Error::new(ErrorKind::Other, "route command failed"));
         };
 
         self.route = Some(route);
@@ -397,11 +401,13 @@ impl TunDevice {
             if value {
                 req.ifr_ifru.ifru_flags |= (libc::IFF_UP | libc::IFF_RUNNING) as libc::c_short;
             } else {
-                req.ifr_ifru.ifru_flags &= !(libc::IFF_UP) as libc::c_short;
+                req.ifr_ifru.ifru_flags &= !(libc::IFF_UP | libc::IFF_RUNNING) as libc::c_short;
             }
 
             siocsifflags(ctl.as_raw_fd(), &req)?;
         }
+
+        self.is_enabled_ = value; 
 
         Ok(())
     }
@@ -682,6 +688,7 @@ impl TunDevice {
         self.tun.packet_info
     }
 
+    #[allow(dead_code)]
     fn is_enabled(&self) -> Result<bool> {
         let ctl = &self.ctl_fd;
         unsafe {
@@ -705,7 +712,7 @@ impl TunDevice {
 
 impl Read for TunDevice {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        if !self.is_enabled()? {
+        if !self.is_enabled_ {
             return Err(Error::new(ErrorKind::NotConnected, "Device is not enabled"));
         }
         self.tun.read(buf)
@@ -714,7 +721,7 @@ impl Read for TunDevice {
 
 impl Write for TunDevice {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        if !self.is_enabled()? {
+        if !self.is_enabled_ {
             return Err(Error::new(ErrorKind::NotConnected, "Device is not enabled"));
         }
         self.tun.write(buf)
