@@ -182,7 +182,7 @@ impl TunDevice {
                 return Err(Error::new(ErrorKind::InvalidData, "Invalid tun name"));
             }
 
-            tun_name[3..].parse::<u32>().unwrap() + 1_u32
+            tun_name[3..].parse::<u32>().unwrap()
         } else {
             0_u32
         };
