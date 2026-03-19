@@ -24,9 +24,10 @@ mod tests {
 
         let server_thread = thread::spawn(move || {
             let mut server = Server::init(8083, &Configuration::default()).unwrap();
+            let mut buffer = [0u8; 8192]; 
 
             for _ in 0..10 {
-                if let Ok((client_addr, msg)) = server.read_socket() {
+                if let Ok((client_addr, msg)) = server.read_socket(&mut buffer) {
                     let shared_secret_key =
                         Some(server.process_request(&client_addr, msg).unwrap());
                     return shared_secret_key;
@@ -40,11 +41,12 @@ mod tests {
 
         let client_thread = thread::spawn(move || {
             let mut client = Client::init(8082, server_addr, &Configuration::default()).unwrap();
+            let mut buffer = [0u8; 8192];
 
             client.initiate_handshake().unwrap();
 
             for _ in 0..10 {
-                if let Ok((_, msg)) = client.read_socket() {
+                if let Ok((_, msg)) = client.read_socket(&mut buffer) {
                     let shared_secret_key = Some(client.process_response(msg).unwrap());
                     return shared_secret_key;
                 }

@@ -97,11 +97,10 @@ impl Server {
         Ok(())
     }
 
-    pub fn read_socket(&mut self) -> Result<(SocketAddr, Message)> {
-        let mut buffer = [0; 5000];
+    pub fn read_socket(&mut self, buffer: &mut [u8]) -> Result<(SocketAddr, Message)> {
         let (len, from_addr) = self
             .socket
-            .recv_from(&mut buffer)
+            .recv_from(buffer)
             .map_err(|e| SocketError::SocketReadError(e.to_string()))?;
         log::trace!("[Socket] Read {} bytes", len);
         let msg = serde_json::from_slice::<Message>(&buffer[..len])
@@ -175,6 +174,7 @@ impl Server {
             .map_err(|_| CommError::MioRegistryError)?;
 
         let mut buffer = [0u8; 2000];
+        let mut socket_buffer = [0u8; 8192]; 
 
         loop {
             poll.poll(&mut events, None)
@@ -184,7 +184,7 @@ impl Server {
                 match event.token() {
                     Token(0) => {
                         let socket_start = std::time::Instant::now();
-                        match self.read_socket() {
+                        match self.read_socket(&mut socket_buffer) {
                             Ok((client_addr, msg)) => {
                                 let socket_read_time = socket_start.elapsed();
                                 log::trace!("[Socket] Read took {:?}", socket_read_time);

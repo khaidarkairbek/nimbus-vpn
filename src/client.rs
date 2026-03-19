@@ -40,11 +40,12 @@ impl Client {
         log::info!("Client successfully initialized");
         Ok(client)
     }
-    pub fn set_shared_secret_key(&mut self, new_key: BigUint) {
+
+    fn set_shared_secret_key(&mut self, new_key: BigUint) {
         self.shared_secret_key = Some(new_key);
     }
 
-    pub fn get_shared_secret_key(&self) -> Result<&BigUint> {
+    fn get_shared_secret_key(&self) -> Result<&BigUint> {
         if let Some(shared_key) = self.shared_secret_key.as_ref() {
             Ok(shared_key)
         } else {
@@ -88,11 +89,10 @@ impl Client {
         Ok(())
     }
 
-    pub fn read_socket(&mut self) -> Result<(SocketAddr, Message)> {
-        let mut buffer = [0; 5000];
+    pub fn read_socket(&mut self, buffer: &mut [u8]) -> Result<(SocketAddr, Message)> {
         let (len, from_addr) = self
             .socket
-            .recv_from(&mut buffer)
+            .recv_from(buffer)
             .map_err(|e| SocketError::SocketReadError(e.to_string()))?;
         log::trace!("[Socket] Read {} bytes", len);
         let msg = serde_json::from_slice::<Message>(&buffer[..len])
@@ -140,6 +140,7 @@ impl Client {
 
         self.initiate_handshake()?;
         let mut buffer = [0u8; 2000];
+        let mut socket_buffer = [0u8; 8192]; 
 
         loop {
             poll.poll(&mut events, None)
@@ -149,7 +150,7 @@ impl Client {
                 match event.token() {
                     Token(0) => {
                         let socket_start = std::time::Instant::now();
-                        match self.read_socket() {
+                        match self.read_socket(&mut socket_buffer) {
                             Ok((addr, msg)) => {
                                 let socket_read_time = socket_start.elapsed();
                                 log::trace!("[Socket] Read took {:?}", socket_read_time);
@@ -301,10 +302,11 @@ mod tests {
 
         let server_thread = thread::spawn(move || {
             let mut server = Server::init(8081, &Configuration::default()).unwrap();
+            let mut buffer = [0u8; 8192]; 
             let mut connection_established = false;
 
             for _ in 0..10 {
-                if let Ok((client_addr, msg)) = server.read_socket() {
+                if let Ok((client_addr, msg)) = server.read_socket(&mut buffer) {
                     assert_eq!(client_addr, _client_addr);
 
                     let shared_secret_key = server.process_request(&client_addr, msg).unwrap();
@@ -322,7 +324,7 @@ mod tests {
             assert!(connection_established);
 
             for _ in 0..10 {
-                if let Ok((client_addr, msg)) = server.read_socket() {
+                if let Ok((client_addr, msg)) = server.read_socket(&mut buffer) {
                     assert_eq!(client_addr, _client_addr);
                     match msg {
                         Message::PayLoad { data } => {
