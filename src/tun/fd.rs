@@ -3,7 +3,7 @@ use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 
 #[derive(Debug)]
 pub struct Fd {
-    pub raw: RawFd,
+    raw: RawFd,
     close_fd_on_drop: bool,
 }
 
