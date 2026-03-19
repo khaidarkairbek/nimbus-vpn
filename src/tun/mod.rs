@@ -32,7 +32,7 @@ impl TunDevice {
         let mtu = config.mtu.unwrap_or(DEFAULT_MTU);
 
         let id = if let Some(tun_name) = config.tun_name.as_ref() {
-            if tun_name.len() > libc::IFNAMSIZ {
+            if tun_name.len() >= libc::IFNAMSIZ {
                 return Err(Error::new(ErrorKind::InvalidData, "Too long tun name"));
             }
 
@@ -174,7 +174,7 @@ impl TunDevice {
         let mtu = config.mtu.unwrap_or(DEFAULT_MTU);
 
         let id = if let Some(tun_name) = config.tun_name.as_ref() {
-            if tun_name.len() > libc::IFNAMSIZ {
+            if tun_name.len() >= libc::IFNAMSIZ {
                 return Err(Error::new(ErrorKind::InvalidData, "Too long tun name"));
             }
 
