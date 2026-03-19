@@ -167,14 +167,15 @@ mod tests {
 
     fn setup_fds() -> [i32; 2] {
         let mut fds = [0; 2];
-        unsafe { libc::pipe(fds.as_mut_ptr()) };
-
-        return fds;
+        let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        assert_eq!(ret, 0, "pipe() failed");
+        fds
     }
 
     #[test]
     fn test_tun_new_without_packet_info() {
-        let [fd_1, _] = setup_fds();
+        let [fd_1, fd_2] = setup_fds();
+        unsafe { libc::close(fd_2) };
 
         let fd = Fd::new(fd_1, true).unwrap();
 
@@ -187,7 +188,8 @@ mod tests {
 
     #[test]
     fn test_tun_new_with_packet_info() {
-        let [fd_1, _] = setup_fds();
+        let [fd_1, fd_2] = setup_fds();
+        unsafe { libc::close(fd_2) };
 
         let fd = Fd::new(fd_1, true).unwrap();
 
@@ -200,7 +202,8 @@ mod tests {
 
     #[test]
     fn test_generate_packet_header() {
-        let [fd_1, _] = setup_fds();
+        let [fd_1, fd_2] = setup_fds();
+        unsafe { libc::close(fd_2) };
 
         let fd = Fd::new(fd_1, true).unwrap();
 
@@ -247,12 +250,10 @@ mod tests {
         let mut tun_writer = Tun::new(writer, 1500, true);
 
         let mut packet = [0u8; 20];
-        packet[0] = 4 << 4;
+        packet[0] = 4 << 4; // IPv4 version byte; must stay in high nibble of byte 0
         let msg = b"hello";
-
-        for (p, m) in packet.iter_mut().zip(msg) {
-            *p = *m;
-        }
+        // Copy message starting at byte 1 so the version byte is not overwritten
+        packet[1..1 + msg.len()].copy_from_slice(msg);
 
         tun_writer.write(&packet).unwrap();
 

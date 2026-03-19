@@ -369,7 +369,6 @@ impl TunDevice {
 
     pub fn set_nonblock(&self) -> Result<()> {
         self.tun.set_nonblocking()?;
-        self.ctl_fd.set_nonblocking()?;
         Ok(())
     }
 
@@ -377,6 +376,9 @@ impl TunDevice {
     pub fn tun_index(&self) -> Result<i32> {
         let cstr = std::ffi::CString::new(self.tun_name.clone())?;
         let index = unsafe { libc::if_nametoindex(cstr.as_ptr()) };
+        if index == 0 {
+            return Err(Error::last_os_error());
+        }
         Ok(index as i32)
     }
 
@@ -889,6 +891,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn test_dev_packet_capture() {
         let client_ip: Ipv4Addr = "10.0.0.3".parse().unwrap();

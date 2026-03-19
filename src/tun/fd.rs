@@ -87,17 +87,18 @@ mod tests {
 
     fn setup_fds() -> [i32; 2] {
         let mut fds = [0; 2];
-        unsafe { libc::pipe(fds.as_mut_ptr()) };
-
-        return fds;
+        let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        assert_eq!(ret, 0, "pipe() failed");
+        fds
     }
 
     #[test]
     fn test_new_valid_fd() {
-        let [fd_1, _] = setup_fds();
+        let [fd_1, fd_2] = setup_fds();
+        unsafe { libc::close(fd_2) };
 
         let fd = Fd::new(fd_1, false).unwrap();
-        assert_eq!(fd.raw, fd_1);
+        assert_eq!(fd.as_raw_fd(), fd_1);
     }
 
     #[test]
@@ -109,7 +110,8 @@ mod tests {
 
     #[test]
     fn test_set_non_block_valid() {
-        let [fd_1, _] = setup_fds();
+        let [fd_1, fd_2] = setup_fds();
+        unsafe { libc::close(fd_2) };
 
         let fd = Fd::new(fd_1, true).unwrap();
 
@@ -143,7 +145,8 @@ mod tests {
 
     #[test]
     fn test_drop() {
-        let [fd_1, _] = setup_fds();
+        let [fd_1, fd_2] = setup_fds();
+        unsafe { libc::close(fd_2) };
 
         let fd = Fd::new(fd_1, true).unwrap();
 
@@ -153,7 +156,8 @@ mod tests {
 
         assert_eq!(flags, -1);
 
-        let [fd_1, _] = setup_fds();
+        let [fd_1, fd_2] = setup_fds();
+        unsafe { libc::close(fd_2) };
 
         let fd = Fd::new(fd_1, false).unwrap();
 
