@@ -321,8 +321,7 @@ mod tests {
 
                     let shared_secret_key = server.process_request(&client_addr, msg).unwrap();
                     server
-                        .set_shared_secret_key(shared_secret_key, client_addr)
-                        .unwrap();
+                        .set_shared_secret_key(shared_secret_key, client_addr);
 
                     connection_established = true;
                     break;

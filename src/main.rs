@@ -17,6 +17,8 @@ fn main() -> Result<()> {
     let args = cli::Cli::parse();
     env_logger::init();
 
+    let stop = Arc::new(AtomicBool::new(false));
+
     match args.mode {
         Mode::Client {
             address,
@@ -26,11 +28,10 @@ fn main() -> Result<()> {
             let server_addr = format!("{address}:{port}")
                 .parse()
                 .map_err(|e| anyhow::anyhow!("Invalid server address '{address}:{port}': {e}"))?;
-            let stop = Arc::new(AtomicBool::new(false));
             Client::init(local_port, server_addr, &Configuration::default())?.start(stop)?;
         }
         Mode::Server { port } => {
-            Server::init(port, &Configuration::default())?.start()?;
+            Server::init(port, &Configuration::default())?.start(stop)?;
         }
     }
 

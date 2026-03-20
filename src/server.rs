@@ -1,6 +1,11 @@
 use std::{
     collections::HashMap,
     io::{Read, Write},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
     net::SocketAddr,
     os::fd::AsRawFd,
     process,
@@ -49,9 +54,8 @@ impl Server {
         &mut self,
         new_key: BigUint,
         client_addr: SocketAddr,
-    ) -> Result<()> {
+    ) {
         self.clients.insert(client_addr, new_key);
-        Ok(())
     }
 
     #[cfg(test)]
@@ -85,14 +89,16 @@ impl Server {
         }
     }
 
-    pub fn write_socket(&self, data: &[u8], client_addr: &SocketAddr) -> Result<()> {
-        let mut bytes_written = 0;
-        while bytes_written < data.len() {
-            bytes_written += self
-                .socket
-                .send_to(&data[bytes_written..data.len()], *client_addr)
-                .map_err(|e| SocketError::SocketSendToError(e.to_string()))?;
+    pub fn write_socket(&self, data: &[u8], client_addr: &SocketAddr) -> Result<(), SocketError> {
+        let bytes_written = self
+            .socket
+            .send_to(&data, *client_addr)
+            .map_err(|e| SocketError::SocketSendToError(e.to_string()))?; 
+
+        if bytes_written < data.len() {
+            return Err(SocketError::SocketSendToError("bytes_written less than buffer len to write".to_string()));
         }
+
         log::trace!("[Socket] Written {} bytes", data.len());
         Ok(())
     }
@@ -155,7 +161,7 @@ impl Server {
         Ok(())
     }
 
-    pub fn start(&mut self) -> Result<()> {
+    pub fn start(&mut self, stop: Arc<AtomicBool>) -> Result<()> {
         let mut poll = Poll::new()?;
         let mut events = Events::with_capacity(1024);
 
@@ -169,7 +175,7 @@ impl Server {
             .register(
                 &mut tun_socket,
                 Token(1),
-                Interest::READABLE | Interest::WRITABLE,
+                Interest::READABLE,
             )
             .map_err(|_| CommError::MioRegistryError)?;
 
@@ -177,7 +183,11 @@ impl Server {
         let mut socket_buffer = [0u8; 8192]; 
 
         loop {
-            poll.poll(&mut events, None)
+            if stop.load(Ordering::Relaxed) {
+                break Ok(());
+            }
+
+            poll.poll(&mut events, Some(Duration::from_millis(100)))
                 .map_err(|_| CommError::MioPollingError)?;
             for event in &events {
                 let start_time = std::time::Instant::now();
@@ -198,7 +208,7 @@ impl Server {
                                             "[Handshake] Shared secret key: {:?}",
                                             shared_secret_key
                                         );
-                                        self.set_shared_secret_key(shared_secret_key, client_addr)?;
+                                        self.set_shared_secret_key(shared_secret_key, client_addr);
                                         log::trace!(
                                             "[Handshake] Processing took {:?}",
                                             handshake_start.elapsed()
