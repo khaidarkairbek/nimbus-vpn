@@ -17,7 +17,7 @@ use rand::thread_rng;
 use crate::{
     comm::Message,
     crypto::{decrypt_data, encrypt_data, generate_public_key, generate_shared_key},
-    error::{ClientError, CommError, LogicError, SocketError},
+    error::{ClientError, CommError, LogicError, SocketError, TunOperationError},
     tun::{config::Configuration, TunDevice},
 };
 
@@ -85,7 +85,7 @@ impl Client {
     pub fn write_socket(&mut self, data: &[u8]) -> Result<(), SocketError> {
         let bytes_written = self
             .socket
-            .send_to(&data, self.server_addr)
+            .send_to(data, self.server_addr)
             .map_err(|e| SocketError::SocketSendToError(e.to_string()))?; 
 
         if bytes_written < data.len() {
@@ -108,10 +108,15 @@ impl Client {
         Ok((from_addr, msg))
     }
 
-    pub fn write_tun(&mut self, data: &[u8]) -> Result<()> {
-        let mut bytes_written = 0;
-        while bytes_written < data.len() {
-            bytes_written += self.tun.write(&data[bytes_written..data.len()])?;
+    fn write_tun(&mut self, data: &[u8]) -> Result<(), TunOperationError> {
+
+        let bytes_written = self
+            .tun
+            .write(data)
+            .map_err(|e| TunOperationError::TunWriteError(e.to_string()))?; 
+        
+        if bytes_written < data.len() {
+            return Err(TunOperationError::TunWriteError("bytes_written less than buffer len to write".to_string()));
         }
 
         log::trace!("[Tun] Written {} bytes", bytes_written);

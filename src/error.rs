@@ -18,9 +18,9 @@ pub enum TunInitError {
 #[expect(unused)]
 pub enum TunOperationError {
     #[error("Problem writing to TUN device.")]
-    TunWriteError(io::Error),
+    TunWriteError(String),
     #[error("Problem reading TUN device.")]
-    TunReadError(io::Error),
+    TunReadError(String),
 }
 
 #[derive(Error, Debug)]
