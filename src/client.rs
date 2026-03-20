@@ -2,6 +2,11 @@ use std::{
     io::{Read, Write},
     net::SocketAddr,
     os::fd::AsRawFd,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
 };
 
 use anyhow::{bail, Result};
@@ -77,14 +82,16 @@ impl Client {
         }
     }
 
-    pub fn write_socket(&mut self, data: &[u8]) -> Result<()> {
-        let mut bytes_written = 0;
-        while bytes_written < data.len() {
-            bytes_written += self
-                .socket
-                .send_to(&data[bytes_written..data.len()], self.server_addr)
-                .map_err(|e| SocketError::SocketSendToError(e.to_string()))?;
+    pub fn write_socket(&mut self, data: &[u8]) -> Result<(), SocketError> {
+        let bytes_written = self
+            .socket
+            .send_to(&data, self.server_addr)
+            .map_err(|e| SocketError::SocketSendToError(e.to_string()))?; 
+
+        if bytes_written < data.len() {
+            return Err(SocketError::SocketSendToError("bytes_written less than buffer len to write".to_string()));
         }
+
         log::trace!("[Socket] Written {} bytes", data.len());
         Ok(())
     }
@@ -120,7 +127,7 @@ impl Client {
         Ok(len)
     }
 
-    pub fn start(&mut self) -> Result<()> {
+    pub fn start(&mut self, stop: Arc<AtomicBool>) -> Result<()> {
         let mut poll = Poll::new()?;
         let mut events = Events::with_capacity(1024);
 
@@ -134,7 +141,7 @@ impl Client {
             .register(
                 &mut tun_socket,
                 Token(1),
-                Interest::READABLE | Interest::WRITABLE,
+                Interest::READABLE,
             )
             .map_err(|_| CommError::MioRegistryError)?;
 
@@ -143,8 +150,11 @@ impl Client {
         let mut socket_buffer = [0u8; 8192]; 
 
         loop {
-            poll.poll(&mut events, None)
-                .map_err(|_| CommError::MioPollingError)?; // Replace with async tokio
+            if stop.load(Ordering::Relaxed) {
+                break Ok(());
+            }
+            poll.poll(&mut events, Some(Duration::from_millis(100)))
+                .map_err(|_| CommError::MioPollingError)?;
             for event in &events {
                 let start_time = std::time::Instant::now();
                 match event.token() {
@@ -346,7 +356,9 @@ mod tests {
             }
         });
 
-        thread::spawn(move || {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_clone = Arc::clone(&stop);
+        let client_thread = thread::spawn(move || {
             let mut client_dev_config = Configuration::default();
             client_dev_config.address = Some(client_ip);
             client_dev_config.destination = Some(destination_ip);
@@ -354,7 +366,7 @@ mod tests {
 
             let mut client = Client::init(8080, _server_addr, &client_dev_config).unwrap();
 
-            client.start().unwrap();
+            client.start(stop_clone).unwrap();
         });
 
         let packet_source_thread = thread::spawn(move || {
@@ -370,5 +382,7 @@ mod tests {
 
         server_thread.join().unwrap();
         packet_source_thread.join().unwrap();
+        stop.store(true, Ordering::Relaxed);
+        client_thread.join().unwrap();
     }
 }

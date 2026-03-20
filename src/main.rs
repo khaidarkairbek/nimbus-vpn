@@ -1,3 +1,5 @@
+use std::sync::{atomic::AtomicBool, Arc};
+
 use anyhow::Result;
 use clap::Parser;
 
@@ -24,7 +26,8 @@ fn main() -> Result<()> {
             let server_addr = format!("{address}:{port}")
                 .parse()
                 .map_err(|e| anyhow::anyhow!("Invalid server address '{address}:{port}': {e}"))?;
-            Client::init(local_port, server_addr, &Configuration::default())?.start()?;
+            let stop = Arc::new(AtomicBool::new(false));
+            Client::init(local_port, server_addr, &Configuration::default())?.start(stop)?;
         }
         Mode::Server { port } => {
             Server::init(port, &Configuration::default())?.start()?;
