@@ -1,14 +1,14 @@
 use std::{
     collections::HashMap,
     io::{Read, Write},
+    net::{Ipv4Addr, SocketAddr},
+    os::fd::AsRawFd,
+    process,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
     time::Duration,
-    net::SocketAddr,
-    os::fd::AsRawFd,
-    process,
 };
 
 use anyhow::{bail, Result};
@@ -26,8 +26,25 @@ use crate::{
 pub struct Server {
     socket: UdpSocket,
     clients: HashMap<SocketAddr, BigUint>,
+    client_ips: HashMap<Ipv4Addr, SocketAddr>,
     tun: TunDevice,
     private_key: BigUint,
+}
+
+fn ipv4_src(packet: &[u8]) -> Option<Ipv4Addr> {
+    if packet.len() >= 20 && (packet[0] >> 4) == 4 {
+        Some(Ipv4Addr::from([packet[12], packet[13], packet[14], packet[15]]))
+    } else {
+        None
+    }
+}
+
+fn ipv4_dst(packet: &[u8]) -> Option<Ipv4Addr> {
+    if packet.len() >= 20 && (packet[0] >> 4) == 4 {
+        Some(Ipv4Addr::from([packet[16], packet[17], packet[18], packet[19]]))
+    } else {
+        None
+    }
 }
 
 impl Server {
@@ -41,6 +58,7 @@ impl Server {
         let server = Server {
             socket,
             clients: HashMap::new(),
+            client_ips: HashMap::new(),
             tun: TunDevice::new(tun_config)?,
             private_key,
         };
@@ -227,6 +245,10 @@ impl Server {
                                                 decrypt_start.elapsed()
                                             );
 
+                                            if let Some(src_ip) = ipv4_src(&decrypted_data) {
+                                                self.client_ips.insert(src_ip, client_addr);
+                                            }
+
                                             let tun_write_start = std::time::Instant::now();
                                             if let Err(e) = self.write_tun(&decrypted_data) {
                                                 log::error!("[Socket] Tun write error: {}", e);
@@ -277,71 +299,58 @@ impl Server {
 
                                 let data = &buffer[..len];
 
-                                let clients: Vec<(SocketAddr, BigUint)> = self
-                                    .clients
-                                    .iter()
-                                    .map(|(&addr, key)| (addr, key.clone()))
-                                    .collect();
-
-                                if clients.is_empty() {
-                                    log::warn!("[Tun] No connected clients to forward packet to");
-                                }
-
-                                for (client_addr, key) in &clients {
-                                    log::trace!("[Tun] Forwarding packet to {}", client_addr);
-
-                                    let encrypt_start = std::time::Instant::now();
-                                    let encrypted_data = match encrypt_data(data, key) {
-                                        Ok(d) => d,
-                                        Err(e) => {
-                                            log::error!(
-                                                "[Crypto] Encrypt error for {}: {}",
-                                                client_addr,
-                                                e
-                                            );
-                                            continue;
-                                        }
-                                    };
-                                    log::trace!(
-                                        "[Crypto] Encrypt took {:?}",
-                                        encrypt_start.elapsed()
-                                    );
-
-                                    let serialize_start = std::time::Instant::now();
-                                    let msg = Message::PayLoad {
-                                        data: encrypted_data,
-                                    };
-                                    let serialized = match serde_json::to_string::<Message>(&msg) {
-                                        Ok(s) => s,
-                                        Err(e) => {
-                                            log::error!(
-                                                "[Serialize] Error for {}: {}",
-                                                client_addr,
-                                                e
-                                            );
-                                            continue;
-                                        }
-                                    };
-                                    log::trace!(
-                                        "[Serialize] JSON took {:?}",
-                                        serialize_start.elapsed()
-                                    );
-
-                                    let socket_write_start = std::time::Instant::now();
-                                    if let Err(e) =
-                                        self.write_socket(serialized.as_bytes(), client_addr)
-                                    {
-                                        log::error!(
-                                            "[Tun] Socket write error for {}: {}",
-                                            client_addr,
-                                            e
-                                        );
+                                let dst_ip = match ipv4_dst(data) {
+                                    Some(ip) => ip,
+                                    None => {
+                                        log::warn!("[Tun] Could not parse destination IP, dropping packet");
+                                        continue;
                                     }
-                                    log::trace!(
-                                        "[Socket] Write took {:?}",
-                                        socket_write_start.elapsed()
-                                    );
+                                };
+
+                                let client_addr = match self.client_ips.get(&dst_ip).copied() {
+                                    Some(addr) => addr,
+                                    None => {
+                                        log::warn!("[Tun] No client for destination {}, dropping packet", dst_ip);
+                                        continue;
+                                    }
+                                };
+
+                                let key = match self.clients.get(&client_addr).cloned() {
+                                    Some(k) => k,
+                                    None => {
+                                        log::warn!("[Tun] No key for client {}", client_addr);
+                                        continue;
+                                    }
+                                };
+
+                                log::trace!("[Tun] Forwarding packet to {}", client_addr);
+
+                                let encrypt_start = std::time::Instant::now();
+                                let encrypted_data = match encrypt_data(data, &key) {
+                                    Ok(d) => d,
+                                    Err(e) => {
+                                        log::error!("[Crypto] Encrypt error for {}: {}", client_addr, e);
+                                        continue;
+                                    }
+                                };
+                                log::trace!("[Crypto] Encrypt took {:?}", encrypt_start.elapsed());
+
+                                let serialize_start = std::time::Instant::now();
+                                let msg = Message::PayLoad { data: encrypted_data };
+                                let serialized = match serde_json::to_string::<Message>(&msg) {
+                                    Ok(s) => s,
+                                    Err(e) => {
+                                        log::error!("[Serialize] Error for {}: {}", client_addr, e);
+                                        continue;
+                                    }
+                                };
+                                log::trace!("[Serialize] JSON took {:?}", serialize_start.elapsed());
+
+                                let socket_write_start = std::time::Instant::now();
+                                if let Err(e) = self.write_socket(serialized.as_bytes(), &client_addr) {
+                                    log::error!("[Tun] Socket write error for {}: {}", client_addr, e);
                                 }
+                                log::trace!("[Socket] Write took {:?}", socket_write_start.elapsed());
                             }
                             Err(e) => log::error!("[Tun] The read error: {}", e),
                         }
