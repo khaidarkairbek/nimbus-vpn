@@ -282,6 +282,9 @@ impl Client {
                             Err(e) => log::error!("[Tun] The read error: {}", e),
                         }
                         log::trace!("[Tun] Total tun event took {:?}", start_time.elapsed());
+                        poll.registry()
+                            .reregister(&mut tun_socket, Token(1), Interest::READABLE)
+                            .map_err(|_| CommError::MioRegistryError)?;
                     }
                     _ => (),
                 }
