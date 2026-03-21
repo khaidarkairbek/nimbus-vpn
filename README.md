@@ -1,126 +1,88 @@
-Nimbus VPN provides a robust and secure way to establish VPN connections. It is compatible with both macOS and Linux. The project employs the Diffie-Hellman key exchange algorithm for secure key generation and uses the ChaCha20-Poly1305 algorithm for authenticated encryption, ensuring that data remains confidential and tamper-proof.
+# Nimbus VPN
 
-## Features
+A simple VPN using TUN devices, Diffie-Hellman key exchange (RFC 3526 Group 14), and ChaCha20-Poly1305 encryption. Supports macOS and Linux.
 
-- **Secure Key Exchange**: Uses the Diffie-Hellman algorithm to securely establish shared secret keys between the client and server.
-- **Authenticated Encryption**: Implements the ChaCha20-Poly1305 algorithm to encrypt and authenticate data, ensuring both confidentiality and integrity.
-- **TUN Device Management**: Handles the creation, configuration, and operation of TUN devices for secure network tunneling.
-- **Cross-Platform Support**: Compatible with macOS and Linux, with platform-specific optimizations.
-- **Graceful Shutdown**: Handles system signals for clean and safe shutdown of both client and server applications.
-- **User-Friendly CLI**: Provides an intuitive command-line interface for easy configuration and management.
-  
-## Architecture
+## Build
 
-### Components
-
-<table>
-  <tr>
-    <th>Component</th>
-    <th>File</th>
-    <th>Purpose</th>
-  </tr>
-  <tr>
-    <td>Command-Line Interface (CLI)</td>
-    <td><code>cli.rs</code></td>
-    <td>Parses command-line arguments to determine the mode (client or server) and configuration options.</td>
-  </tr>
-  <tr>
-    <td>Main Entry Point</td>
-    <td><code>main.rs</code></td>
-    <td>Initializes the VPN in either client or server mode based on parsed CLI arguments.</td>
-  </tr>
-  <tr>
-    <td>Communication Handling</td>
-    <td><code>comm.rs</code></td>
-    <td>Implements core communication logic for both client and server sides.</td>
-  </tr>
-  <tr>
-    <td>Device Management</td>
-    <td><code>dev.rs</code></td>
-    <td>Manages client and server states, key management, and message processing.</td>
-  </tr>
-  <tr>
-    <td>TUN Device Handling</td>
-    <td><code>tun.rs</code></td>
-    <td>Manages TUN device creation, configuration, and I/O operations.</td>
-  </tr>
-  <tr>
-    <td>Cryptographic Operations</td>
-    <td><code>crypto.rs</code></td>
-    <td>Handles cryptographic operations for key exchanges.</td>
-  </tr>
-  <tr>
-    <td>Error Handling</td>
-    <td><code>error.rs</code></td>
-    <td>Defines various error types for comprehensive error handling.</td>
-  </tr>
-</table>
-
-### Workflow
-
-1. **Initialization**
-   - Parse command-line arguments to determine mode (client or server).
-   - Initialize necessary components based on mode.
-
-2. **Server Operations**
-   - Bind to the specified address and port.
-   - Enable IP forwarding.
-   - Set up a TUN device.
-   - Enter event loop to handle incoming connections and data.
-
-3. **Client Operations**
-   - Bind to the local address and port.
-   - Set up a TUN device.
-   - Initiate a handshake with the server to establish a secure connection.
-   - Configure the default gateway to route traffic through the VPN.
-   - Enter event loop to handle data transmission.
-
-4. **Key Exchange and Data Transmission**
-   - Perform a Diffie-Hellman key exchange to establish a shared secret key.
-   - Encrypt and decrypt messages exchanged between client and server.
-   - Transmit data through the established VPN tunnel.
-
-5. **Graceful Shutdown**
-   - Monitor for `Ctrl-C` signals.
-     
-## Getting Started
-
-### Prerequisites
-
-- Rust (latest stable version)
-
-### Installation
-
-
-
-Clone the repository:
-
-```sh
-git clone https://github.com/Khadka-Bishal/nimbus-vpn.git
-cd nimbus-vpn
-```
-
-Build the project:
-
-```
+```bash
 cargo build --release
 ```
 
-### Usage
+The binary is at `target/release/nimbus`.
 
-#### Starting the Server
+## Setup
 
+### Prerequisites
+
+Both server and client need:
+- Root / sudo access (required for TUN device creation and route management)
+- Linux: TUN module loaded (`sudo modprobe tun`, verify `/dev/net/tun` exists)
+- macOS: no extra steps needed
+
+### Server
+
+**1. Open UDP port in firewall (e.g. AWS security group: inbound UDP 8080)**
+
+**2. Start the server**
+```bash
+sudo ./target/release/nimbus server --port 8080
 ```
-./target/release/nimbus-vpn server --port 8080 --key "your_server_private_key"
+
+The server will:
+- Create a TUN device with VPN IP `10.0.0.1`
+- Enable IP forwarding via `sysctl`
+
+**3. Set up NAT so client traffic can reach the internet** (optional, needed for full tunnel routing)
+```bash
+# Replace ens5 with your network interface (check with: ip link show)
+sudo iptables -t nat -A POSTROUTING -o ens5 -j MASQUERADE
+sudo iptables -A FORWARD -i tun0 -o ens5 -j ACCEPT
+sudo iptables -A FORWARD -i ens5 -o tun0 -m state --state RELATED,ESTABLISHED -j ACCEPT
 ```
 
-#### Starting the Client
+---
 
+### Client
+
+**Start the client**
+```bash
+sudo ./target/release/nimbus client --address <server-ip> --port 8080 --local-port 9090
 ```
-./target/release/nimbus-vpn client --address "server_address" --port 8080 --key "your_client_private_key" --local-port 8081
+
+The client will:
+- Create a TUN device with VPN IP `10.0.0.2`
+- Perform a DH handshake with the server to establish a shared encryption key
+- Route traffic to `10.0.0.1` through the tunnel
+
+---
+
+## Verify
+
+**Ping the server through the tunnel**
+```bash
+ping 10.0.0.1
 ```
 
-## License
+**Check tunnel traffic is encrypted on the wire**
+```bash
+# On server — should only see UDP, no plaintext ICMP
+sudo tcpdump -i ens5 udp port 8080 -n
 
-This project is licensed under the MIT License. See the [LICENSE](https://github.com/yourusername/project-name/blob/main/LICENSE) file for more details.
+# On server — should see decrypted traffic here
+sudo tcpdump -i tun0 -n
+```
 
+**Test internet routing through the VPN**
+```bash
+curl --interface tun0 https://checkip.amazonaws.com
+# Should return the server's public IP
+```
+
+---
+
+## VPN IPs
+
+| Role   | TUN address | Peer      |
+|--------|-------------|-----------|
+| Server | 10.0.0.1    | 10.0.0.2  |
+| Client | 10.0.0.2    | 10.0.0.1  |
