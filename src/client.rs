@@ -127,7 +127,7 @@ impl Client {
         Ok(())
     }
 
-    pub fn read_tun(&mut self, buffer: &mut [u8]) -> Result<usize> {
+    pub fn read_tun(&mut self, buffer: &mut [u8]) -> Result<usize, std::io::Error> {
         let len = self.tun.read(buffer)?;
 
         log::trace!("[Tun] Read {} bytes", len);
@@ -229,62 +229,74 @@ impl Client {
                     }
                     Token(1) => {
                         let tun_start = std::time::Instant::now();
-                        match self.read_tun(&mut buffer) {
-                            Ok(len) => {
-                                let tun_read_time = tun_start.elapsed();
-                                log::trace!("[Tun] Read took {:?}", tun_read_time);
-
-                                if len == 0 {
-                                    continue;
+                        'drain: loop {
+                            let read_start = std::time::Instant::now();
+                            let len = match self.read_tun(&mut buffer) {
+                                Ok(0) => break 'drain,
+                                Ok(n) => n,
+                                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break 'drain,
+                                Err(e) => {
+                                    log::error!("[Tun] The read error: {}", e);
+                                    break 'drain;
                                 }
+                            };
+                            log::trace!("[Tun] Read took {:?}", read_start.elapsed());
 
-                                if len > 1500 {
-                                    log::warn!(
-                                        "[Tun] Oversized packet received: {} bytes (max 1500)",
-                                        len
-                                    );
-                                    continue;
-                                }
-
-                                let data = &buffer[..len];
-
-                                if let Ok(key) = self.get_shared_secret_key() {
-                                    log::trace!("[Tun] Payload received");
-
-                                    let encrypt_start = std::time::Instant::now();
-                                    let msg = Message::PayLoad {
-                                        data: encrypt_data(data, key)?,
-                                    };
-                                    log::trace!(
-                                        "[Crypto] Encrypt took {:?}",
-                                        encrypt_start.elapsed()
-                                    );
-
-                                    let serialize_start = std::time::Instant::now();
-                                    let serialized = wincode::serialize(&msg)
-                                        .map_err(|e| CommError::SerialError(e.to_string()))?;
-                                    log::trace!(
-                                        "[Serialize] Binary took {:?}",
-                                        serialize_start.elapsed()
-                                    );
-
-                                    let socket_write_start = std::time::Instant::now();
-                                    if let Err(e) = self.write_socket(&serialized) {
-                                        log::error!("[Tun] Socket write error: {}", e);
-                                    }
-                                    log::trace!(
-                                        "[Socket] Write took {:?}",
-                                        socket_write_start.elapsed()
-                                    );
-                                } else {
-                                    log::error!(
-                                        "[Tun] Connection not yet set between client and server"
-                                    )
-                                }
+                            if len > 1500 {
+                                log::warn!(
+                                    "[Tun] Oversized packet received: {} bytes (max 1500)",
+                                    len
+                                );
+                                continue 'drain;
                             }
-                            Err(e) => log::error!("[Tun] The read error: {}", e),
+
+                            let data = &buffer[..len];
+
+                            if let Ok(key) = self.get_shared_secret_key() {
+                                log::trace!("[Tun] Payload received");
+
+                                let encrypt_start = std::time::Instant::now();
+                                let encrypted = match encrypt_data(data, key) {
+                                    Ok(d) => d,
+                                    Err(e) => {
+                                        log::error!("[Crypto] Encrypt error: {}", e);
+                                        continue 'drain;
+                                    }
+                                };
+                                let msg = Message::PayLoad { data: encrypted };
+                                log::trace!(
+                                    "[Crypto] Encrypt took {:?}",
+                                    encrypt_start.elapsed()
+                                );
+
+                                let serialize_start = std::time::Instant::now();
+                                let serialized = match wincode::serialize(&msg) {
+                                    Ok(s) => s,
+                                    Err(e) => {
+                                        log::error!("[Serialize] Error: {}", e);
+                                        continue 'drain;
+                                    }
+                                };
+                                log::trace!(
+                                    "[Serialize] Binary took {:?}",
+                                    serialize_start.elapsed()
+                                );
+
+                                let socket_write_start = std::time::Instant::now();
+                                if let Err(e) = self.write_socket(&serialized) {
+                                    log::error!("[Tun] Socket write error: {}", e);
+                                }
+                                log::trace!(
+                                    "[Socket] Write took {:?}",
+                                    socket_write_start.elapsed()
+                                );
+                            } else {
+                                log::error!(
+                                    "[Tun] Connection not yet set between client and server"
+                                )
+                            }
                         }
-                        log::trace!("[Tun] Total tun event took {:?}", start_time.elapsed());
+                        log::trace!("[Tun] Total tun event took {:?}", tun_start.elapsed());
                         poll.registry()
                             .reregister(&mut tun_socket, Token(1), Interest::READABLE)
                             .map_err(|_| CommError::MioRegistryError)?;

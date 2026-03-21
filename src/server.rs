@@ -150,7 +150,7 @@ impl Server {
         Ok(())
     }
 
-    fn read_tun(&mut self, buffer: &mut [u8]) -> Result<usize> {
+    fn read_tun(&mut self, buffer: &mut [u8]) -> Result<usize, std::io::Error> {
         let len = self.tun.read(buffer)?;
 
         log::trace!("[Tun] Read {} bytes", len);
@@ -286,81 +286,83 @@ impl Server {
                     }
                     Token(1) => {
                         let tun_start = std::time::Instant::now();
-                        match self.read_tun(&mut buffer) {
-                            Ok(len) => {
-                                let tun_read_time = tun_start.elapsed();
-                                log::trace!("[Tun] Read took {:?}", tun_read_time);
-
-                                if len == 0 {
-                                    continue;
+                        'drain: loop {
+                            let read_start = std::time::Instant::now();
+                            let len = match self.read_tun(&mut buffer) {
+                                Ok(0) => break 'drain,
+                                Ok(n) => n,
+                                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break 'drain,
+                                Err(e) => {
+                                    log::error!("[Tun] The read error: {}", e);
+                                    break 'drain;
                                 }
+                            };
+                            log::trace!("[Tun] Read took {:?}", read_start.elapsed());
 
-                                if len > 1500 {
-                                    log::warn!(
-                                        "[Tun] Oversized packet received: {} bytes (max 1500)",
-                                        len
-                                    );
-                                    continue;
-                                }
-
-                                let data = &buffer[..len];
-
-                                let dst_ip = match ipv4_dst(data) {
-                                    Some(ip) => ip,
-                                    None => {
-                                        log::warn!("[Tun] Could not parse destination IP, dropping packet");
-                                        continue;
-                                    }
-                                };
-
-                                let client_addr = match self.client_ips.get(&dst_ip).copied() {
-                                    Some(addr) => addr,
-                                    None => {
-                                        log::warn!("[Tun] No client for destination {}, dropping packet", dst_ip);
-                                        continue;
-                                    }
-                                };
-
-                                let key = match self.clients.get(&client_addr).cloned() {
-                                    Some(k) => k,
-                                    None => {
-                                        log::warn!("[Tun] No key for client {}", client_addr);
-                                        continue;
-                                    }
-                                };
-
-                                log::trace!("[Tun] Forwarding packet to {}", client_addr);
-
-                                let encrypt_start = std::time::Instant::now();
-                                let encrypted_data = match encrypt_data(data, &key) {
-                                    Ok(d) => d,
-                                    Err(e) => {
-                                        log::error!("[Crypto] Encrypt error for {}: {}", client_addr, e);
-                                        continue;
-                                    }
-                                };
-                                log::trace!("[Crypto] Encrypt took {:?}", encrypt_start.elapsed());
-
-                                let serialize_start = std::time::Instant::now();
-                                let msg = Message::PayLoad { data: encrypted_data };
-                                let serialized = match wincode::serialize(&msg) {
-                                    Ok(s) => s,
-                                    Err(e) => {
-                                        log::error!("[Serialize] Error for {}: {}", client_addr, e);
-                                        continue;
-                                    }
-                                };
-                                log::trace!("[Serialize] Binary took {:?}", serialize_start.elapsed());
-
-                                let socket_write_start = std::time::Instant::now();
-                                if let Err(e) = self.write_socket(&serialized, &client_addr) {
-                                    log::error!("[Tun] Socket write error for {}: {}", client_addr, e);
-                                }
-                                log::trace!("[Socket] Write took {:?}", socket_write_start.elapsed());
+                            if len > 1500 {
+                                log::warn!(
+                                    "[Tun] Oversized packet received: {} bytes (max 1500)",
+                                    len
+                                );
+                                continue 'drain;
                             }
-                            Err(e) => log::error!("[Tun] The read error: {}", e),
+
+                            let data = &buffer[..len];
+
+                            let dst_ip = match ipv4_dst(data) {
+                                Some(ip) => ip,
+                                None => {
+                                    log::warn!("[Tun] Could not parse destination IP, dropping packet");
+                                    continue 'drain;
+                                }
+                            };
+
+                            let client_addr = match self.client_ips.get(&dst_ip).copied() {
+                                Some(addr) => addr,
+                                None => {
+                                    log::warn!("[Tun] No client for destination {}, dropping packet", dst_ip);
+                                    continue 'drain;
+                                }
+                            };
+
+                            let key = match self.clients.get(&client_addr).cloned() {
+                                Some(k) => k,
+                                None => {
+                                    log::warn!("[Tun] No key for client {}", client_addr);
+                                    continue 'drain;
+                                }
+                            };
+
+                            log::trace!("[Tun] Forwarding packet to {}", client_addr);
+
+                            let encrypt_start = std::time::Instant::now();
+                            let encrypted_data = match encrypt_data(data, &key) {
+                                Ok(d) => d,
+                                Err(e) => {
+                                    log::error!("[Crypto] Encrypt error for {}: {}", client_addr, e);
+                                    continue 'drain;
+                                }
+                            };
+                            log::trace!("[Crypto] Encrypt took {:?}", encrypt_start.elapsed());
+
+                            let serialize_start = std::time::Instant::now();
+                            let msg = Message::PayLoad { data: encrypted_data };
+                            let serialized = match wincode::serialize(&msg) {
+                                Ok(s) => s,
+                                Err(e) => {
+                                    log::error!("[Serialize] Error for {}: {}", client_addr, e);
+                                    continue 'drain;
+                                }
+                            };
+                            log::trace!("[Serialize] Binary took {:?}", serialize_start.elapsed());
+
+                            let socket_write_start = std::time::Instant::now();
+                            if let Err(e) = self.write_socket(&serialized, &client_addr) {
+                                log::error!("[Tun] Socket write error for {}: {}", client_addr, e);
+                            }
+                            log::trace!("[Socket] Write took {:?}", socket_write_start.elapsed());
                         }
-                        log::trace!("[Tun] Total tun event took {:?}", start_time.elapsed());
+                        log::trace!("[Tun] Total tun event took {:?}", tun_start.elapsed());
                         poll.registry()
                             .reregister(&mut tun_socket, Token(1), Interest::READABLE)
                             .map_err(|_| CommError::MioRegistryError)?;
