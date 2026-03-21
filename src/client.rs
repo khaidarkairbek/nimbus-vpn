@@ -13,6 +13,7 @@ use anyhow::{bail, Result};
 use mio::{net::UdpSocket, unix::SourceFd, Events, Interest, Poll, Token};
 use num_bigint::{BigUint, RandBigInt};
 use rand::thread_rng;
+use wincode; 
 
 use crate::{
     comm::Message,
@@ -61,13 +62,13 @@ impl Client {
     pub fn initiate_handshake(&self) -> Result<()> {
         let public_key = generate_public_key(&self.private_key);
 
-        let request_msg = Message::Request { public_key };
+        let request_msg = Message::Request { public_key: public_key.to_bytes_be() };
 
-        let serialized = serde_json::to_string::<Message>(&request_msg)
+        let serialized = wincode::serialize(&request_msg)
             .map_err(|e| CommError::SerialError(e.to_string()))?;
 
         self.socket
-            .send_to(serialized.as_bytes(), self.server_addr)
+            .send_to(&serialized, self.server_addr)
             .map_err(|e| SocketError::SocketSendToError(e.to_string()))?;
 
         Ok(())
@@ -75,6 +76,7 @@ impl Client {
 
     pub fn process_response(&mut self, response_msg: Message) -> Result<BigUint> {
         if let Message::Response { public_key } = response_msg {
+            let public_key = BigUint::from_bytes_be(&public_key); 
             let shared_secret_key = generate_shared_key(&public_key, &self.private_key);
             Ok(shared_secret_key)
         } else {
@@ -102,7 +104,8 @@ impl Client {
             .recv_from(buffer)
             .map_err(|e| SocketError::SocketReadError(e.to_string()))?;
         log::trace!("[Socket] Read {} bytes", len);
-        let msg = serde_json::from_slice::<Message>(&buffer[..len])
+
+        let msg: Message = wincode::deserialize(&buffer[..len])
             .map_err(|e| CommError::DeserialError(e.to_string()))?;
 
         Ok((from_addr, msg))
@@ -258,15 +261,15 @@ impl Client {
                                     );
 
                                     let serialize_start = std::time::Instant::now();
-                                    let serialized = serde_json::to_string::<Message>(&msg)
+                                    let serialized = wincode::serialize(&msg)
                                         .map_err(|e| CommError::SerialError(e.to_string()))?;
                                     log::trace!(
-                                        "[Serialize] JSON took {:?}",
+                                        "[Serialize] Binary took {:?}",
                                         serialize_start.elapsed()
                                     );
 
                                     let socket_write_start = std::time::Instant::now();
-                                    if let Err(e) = self.write_socket(serialized.as_bytes()) {
+                                    if let Err(e) = self.write_socket(&serialized) {
                                         log::error!("[Tun] Socket write error: {}", e);
                                     }
                                     log::trace!(
