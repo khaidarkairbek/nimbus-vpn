@@ -34,6 +34,7 @@ fn main() -> Result<()> {
             config.address = Some(Ipv4Addr::new(10, 0, 0, 2));
             config.destination = Some(Ipv4Addr::new(10, 0, 0, 1));
             config.netmask = Some(Ipv4Addr::new(255, 255, 255, 255));
+            config.mtu = Some(1420);
             Client::init(local_port, server_addr, &config)?.start(stop)?;
         }
         Mode::Server { port } => {
@@ -41,6 +42,7 @@ fn main() -> Result<()> {
             config.address = Some(Ipv4Addr::new(10, 0, 0, 1));
             config.destination = Some(Ipv4Addr::new(10, 0, 0, 2));
             config.netmask = Some(Ipv4Addr::new(255, 255, 255, 255));
+            config.mtu = Some(1420);
             Server::init(port, &config)?.start(stop)?;
         }
     }
