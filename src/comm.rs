@@ -1,11 +1,10 @@
-use num_bigint::BigUint;
-use serde::{Deserialize, Serialize};
-use std::str;
+use wincode::{SchemaRead, SchemaWrite}; 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(SchemaRead, SchemaWrite, Debug)]
 pub enum Message {
-    Request { public_key: BigUint },
-    Response { public_key: BigUint },
+    // keys in big-endian
+    Request { public_key: Vec<u8> },
+    Response { public_key: Vec<u8> },
     PayLoad { data: Vec<u8> },
 }
 
